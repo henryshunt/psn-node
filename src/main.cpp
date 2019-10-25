@@ -1,6 +1,10 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
+#include <NTPClient.h>
+#include <WiFiUdp.h>
+#include <ctime>
+#include <EEPROM.h>
 
 const char* NETWORK_ID = "***REMOVED***";
 const char* NETWORK_PASS = "***REMOVED***";
@@ -13,8 +17,15 @@ char* node_topic;
 
 WiFiClient network;
 PubSubClient mqtt_client(network);
+WiFiUDP ntpUDP;
+NTPClient ntpClient(ntpUDP);
+
+const char* report_base = "{ node: '%s', time: '%s', "
+    "airt: %.1f, relh: %.1f, batt: %.2f, rssi: %d }";
+char report[256];
 
 
+void sample_sensors();
 bool network_connect();
 bool broker_connect();
 
@@ -29,29 +40,53 @@ void setup()
     sprintf(mac_address, "%X-%X-%X-%X-%X-%X", mac_temp[0],
         mac_temp[1], mac_temp[2], mac_temp[3], mac_temp[4], mac_temp[5]);
 
-    // Create MQTT topic
+    // Create MQTT topic string
     node_topic = (char*)malloc(strlen(TOPIC_BASE) + strlen(mac_address));
     strcpy(node_topic, TOPIC_BASE);
     strcat(node_topic, mac_address);
 
 
+    // Update RTC if device has had a full reset
     if (network_connect())
     {
-        if (broker_connect())
+        if (EEPROM.read(0) == 0)
         {
-            Serial.println("ONLINE");
-            mqtt_client.publish(node_topic, "test");
+            ntpClient.begin();
+            while (ntpClient.forceUpdate() == false)
+            ntpClient.end();
+
+            //Set RTC
+            //EEPROM.write(0, 1);
         }
     }
+
+    sample_sensors();
 }
 
 void sample_sensors()
 {
+    time_t epoch = ntpClient.getEpochTime();
+    tm* date_time = gmtime(&epoch);
+    char time[32];
+    strftime(time, 32, "%Y-%m-%d %H:%M:%S", date_time);
+    Serial.println(time); 
 
+    float airt = 13.3;
+    float relh = 93.6;
+    float batt = 2.54;
+    int sigs = WiFi.RSSI();
+
+    sprintf(report, report_base, mac_address, time, airt, relh, batt, sigs);
+    Serial.println(report);
+
+    if (network_connect() && broker_connect())
+        mqtt_client.publish(node_topic, report);
 }
 
 bool network_connect()
 {
+    if (WiFi.status() == WL_CONNECTED) return true;
+
     int checks = 0;
     WiFi.begin(NETWORK_ID, NETWORK_PASS);
     delay(500);
@@ -79,6 +114,8 @@ bool broker_connect()
     return mqtt_client.connected();
 }
 
-void loop() {
+
+void loop()
+{
     
 }
