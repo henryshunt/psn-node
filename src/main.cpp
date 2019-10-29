@@ -1,16 +1,21 @@
 #include <Arduino.h>
 #include <WiFi.h>
-#include <PubSubClient.h>
-#include <NTPClient.h>
 #include <WiFiUdp.h>
 #include <ctime>
 #include <EEPROM.h>
+#include <Wire.h>
+
+#include "PubSubClient.h"
+#include "RTClib.h"
+#include "NTPClient.h"
+
 
 const char* NETWORK_ID = "***REMOVED***";
 const char* NETWORK_PASS = "***REMOVED***";
 const char* BROKER_ADDR = "192.168.0.61";
 const int BROKER_PORT = 1883;
 const char* TOPIC_BASE = "nodes/";
+
 
 char mac_address[18];
 char* node_topic;
@@ -20,8 +25,8 @@ PubSubClient mqtt_client(network);
 WiFiUDP ntpUDP;
 NTPClient ntpClient(ntpUDP);
 
-const char* report_base = "{ node: '%s', time: '%s', "
-    "airt: %.1f, relh: %.1f, batt: %.2f, rssi: %d }";
+const char* report_base = "{ \"node\": \"%s\", \"time\": \"%s\", " "\"airt\": %.1f, "
+    "\"relh\": %.1f, \"lvis\": %d, \"lifr\": %d, \"batv\": %.2f, \"sigs\": %d }";
 char report[256];
 
 
@@ -32,12 +37,13 @@ bool broker_connect();
 void setup()
 {
     Serial.begin(9600);
+    //rtc.begin();
     
     // Get MAC address to identify node
     uint8_t mac_temp[6];
     esp_efuse_mac_get_default(mac_temp);
 
-    sprintf(mac_address, "%X-%X-%X-%X-%X-%X", mac_temp[0],
+    sprintf(mac_address, "%x:%x:%x:%x:%x:%x", mac_temp[0],
         mac_temp[1], mac_temp[2], mac_temp[3], mac_temp[4], mac_temp[5]);
 
     // Create MQTT topic string
@@ -55,7 +61,7 @@ void setup()
             while (ntpClient.forceUpdate() == false)
             ntpClient.end();
 
-            //Set RTC
+            //rtc.adjust(DateTime(__DATE__, __TIME__));
             //EEPROM.write(0, 1);
         }
     }
@@ -73,10 +79,13 @@ void sample_sensors()
 
     float airt = 13.3;
     float relh = 93.6;
-    float batt = 2.54;
+    int lvis = 88;
+    int lifr = 72;
+    float batv = 2.54;
     int sigs = WiFi.RSSI();
 
-    sprintf(report, report_base, mac_address, time, airt, relh, batt, sigs);
+    sprintf(report, report_base, mac_address, 
+        time, airt, relh, lvis, lifr, batv, sigs);
     Serial.println(report);
 
     if (network_connect() && broker_connect())
@@ -117,5 +126,10 @@ bool broker_connect()
 
 void loop()
 {
-    
+    // DateTime now = rtc.now();
+   
+    // if (now.second() == 0)
+    // {
+
+    // }
 }
