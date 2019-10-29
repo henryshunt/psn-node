@@ -1,35 +1,31 @@
 #include <Arduino.h>
-#include <WiFi.h>
-#include <WiFiUdp.h>
-#include <ctime>
-#include <EEPROM.h>
 #include <Wire.h>
+#include <WiFiUdp.h>
+#include <WiFi.h>
+#include <ctime>
 
-#include "PubSubClient.h"
-#include "RTClib.h"
+#include "RtcDS3231.h"
 #include "NTPClient.h"
+#include "PubSubClient.h"
 
 
-const char* NETWORK_ID = "***REMOVED***";
-const char* NETWORK_PASS = "***REMOVED***";
-const char* BROKER_ADDR = "192.168.0.61";
-const int BROKER_PORT = 1883;
-const char* TOPIC_BASE = "nodes/";
+const char* NETWORK_ID = "***REMOVED***"; // WiFi SSID
+const char* NETWORK_PASS = "***REMOVED***"; // WiFi password
+const char* BROKER_ADDR = "192.168.0.61"; // MQTT broker address
+const int BROKER_PORT = 1883; // MQTT broker port
+const char* BROKER_BASE = "nodes/"; // MQTT publish topic base path
 
+char mac_address[18] = { '\0' }; // String for storing the MAC address
+char* broker_topic; // String for storing the topic to publish to
 
-char mac_address[18];
-char* node_topic;
-
-WiFiClient network;
-PubSubClient mqtt_client(network);
+RtcDS3231<TwoWire> rtc(Wire);
 WiFiUDP ntpUDP;
 NTPClient ntpClient(ntpUDP);
-
-const char* report_base = "{ \"node\": \"%s\", \"time\": \"%s\", " "\"airt\": %.1f, "
-    "\"relh\": %.1f, \"lvis\": %d, \"lifr\": %d, \"batv\": %.2f, \"sigs\": %d }";
-char report[256];
+WiFiClient network;
+PubSubClient mqtt_client(network);
 
 
+void update_rtc_time();
 void sample_sensors();
 bool network_connect();
 bool broker_connect();
@@ -37,46 +33,51 @@ bool broker_connect();
 void setup()
 {
     Serial.begin(9600);
-    //rtc.begin();
-    
-    // Get MAC address to identify node
+
+    // Get MAC address for identifying the node
     uint8_t mac_temp[6];
     esp_efuse_mac_get_default(mac_temp);
 
     sprintf(mac_address, "%x:%x:%x:%x:%x:%x", mac_temp[0],
         mac_temp[1], mac_temp[2], mac_temp[3], mac_temp[4], mac_temp[5]);
 
-    // Create MQTT topic string
-    node_topic = (char*)malloc(strlen(TOPIC_BASE) + strlen(mac_address));
-    strcpy(node_topic, TOPIC_BASE);
-    strcat(node_topic, mac_address);
+    // Create MQTT topic from base path and MAC address
+    broker_topic = (char*)calloc(
+        strlen(BROKER_BASE) + strlen(mac_address) + 1, sizeof(char));
+    strcpy(broker_topic, BROKER_BASE);
+    strcat(broker_topic, mac_address);
+
+    Serial.println(network_connect());
+
+    // rtc.Begin();
+
+    // Update RTC stored time if needed (check until success)
+    // while (true)
+    // {
+    //     bool isRTCValid = rtc.IsDateTimeValid();
+
+    //     if (rtc.LastError() == 0)
+    //     {
+    //         if (!isRTCValid) update_rtc_time();
+    //         break;
+    //     }
+    // }
 
 
-    // Update RTC if device has had a full reset
-    if (network_connect())
-    {
-        if (EEPROM.read(0) == 0)
-        {
-            ntpClient.begin();
-            while (ntpClient.forceUpdate() == false)
-            ntpClient.end();
-
-            //rtc.adjust(DateTime(__DATE__, __TIME__));
-            //EEPROM.write(0, 1);
-        }
-    }
-
-    sample_sensors();
+    // sample_sensors();
 }
+
+void loop()
+{
+    // RtcDateTime time = rtc.GetDateTime();
+}
+
 
 void sample_sensors()
 {
-    time_t epoch = ntpClient.getEpochTime();
-    tm* date_time = gmtime(&epoch);
-    char time[32];
-    strftime(time, 32, "%Y-%m-%d %H:%M:%S", date_time);
-    Serial.println(time); 
+    RtcDateTime now = rtc.GetDateTime();
 
+    // Sample each sensor
     float airt = 13.3;
     float relh = 93.6;
     int lvis = 88;
@@ -84,52 +85,75 @@ void sample_sensors()
     float batv = 2.54;
     int sigs = WiFi.RSSI();
 
-    sprintf(report, report_base, mac_address, 
-        time, airt, relh, lvis, lifr, batv, sigs);
+    // Format the report timestamp
+    char time[20] = { '\0' };
+    sprintf(time, "%04u-%02ud-%02u %02u:%02u:%02u", now.Year(), now.Month(),
+        now.Day(), now.Hour(), now.Minute(), now.Second());
+
+    // Generate the report
+    char report[256] = { '\0' };
+    const char* report_base = "{ \"node\": \"%s\", \"time\": \"%s\", \"airt\": %.1f, "
+        "\"relh\": %.1f, \"lvis\": %d, \"lifr\": %d, \"batv\": %.2f, \"sigs\": %d }";
+
+    sprintf(report, report_base, mac_address, time, airt, relh, lvis, lifr,
+        batv, sigs);
     Serial.println(report);
 
+    // Transmit the report
     if (network_connect() && broker_connect())
-        mqtt_client.publish(node_topic, report);
+        mqtt_client.publish(broker_topic, report);
 }
 
+/*
+    Blocks until connected to WiFi or timeout after 10 seconds
+ */
 bool network_connect()
 {
     if (WiFi.status() == WL_CONNECTED) return true;
 
     int checks = 0;
     WiFi.begin(NETWORK_ID, NETWORK_PASS);
-    delay(500);
 
-    // Check status every half second for 8 seconds
-    while (true)
+    // Check connection status and timeout after 10 seconds
+    while (WiFi.status() != WL_CONNECTED)
     {
-        if (WiFi.status() != WL_CONNECTED)
+        if (checks++ < 11)
+            delay(1000);
+        else
         {
-            if (checks++ < 15)
-                delay(500);
-            else
-            {
-                WiFi.disconnect();
-                return false;
-            }
-        } else return true;
+            WiFi.disconnect();
+            return false;
+        }
     }
+
+    return true;
 }
 
 bool broker_connect()
 {
     mqtt_client.setServer(BROKER_ADDR, BROKER_PORT);
-    mqtt_client.connect(node_topic);
+    mqtt_client.connect(broker_topic);
     return mqtt_client.connected();
 }
 
 
-void loop()
+/*
+    Blocks until RTC time has been sucessfully updated via NTP
+ */
+void update_rtc_time()
 {
-    // DateTime now = rtc.now();
-   
-    // if (now.second() == 0)
-    // {
+    while (true)
+    {
+        if (network_connect())
+        {
+            ntpClient.begin();
+            delay(1500);
+            
+            while (ntpClient.forceUpdate() == false)
+            ntpClient.end();
 
-    // }
+            //rtc.adjust(DateTime(__DATE__, __TIME__));
+            return;
+        }
+    }
 }
