@@ -47,57 +47,69 @@ void setup()
     strcpy(broker_topic, BROKER_BASE);
     strcat(broker_topic, mac_address);
 
+    Serial.println("before");
+
     // Don't continue until connected to Wifi
-    // while (!network_connect());
-    
-    // rtc.Begin();
+    while (!network_connect());
+
+    Serial.println("network");
+
+    rtc.Begin();
 
     // Update RTC stored time if needed (loop until success)
-    // while (true)
-    // {
-    //     bool isRTCValid = rtc.IsDateTimeValid();
+    while (true)
+    {
+        bool isRTCValid = rtc.IsDateTimeValid();
 
-    //     if (rtc.LastError() == 0)
-    //     {
-    //         if (!isRTCValid) update_rtc_time();
-    //         break;
-    //     }
-    // }
+        if (rtc.LastError() == 0)
+        {
+            if (!isRTCValid) update_rtc_time();
+            break;
+        }
+    }
 
     // Don't continue until connected to MQTT broker
-    // while (!broker_connect())
-    
-    sample_sensors();
+    while (!broker_connect());
+
+    Serial.println("broker");
+
+    // sample_sensors();
 }
 
 void loop()
 {
-    // RtcDateTime time = rtc.GetDateTime();
+    RtcDateTime now = rtc.GetDateTime();
+
+    if (now.Second() == 0)
+    {
+        sample_sensors();
+        delay(1000);
+    }
 }
 
 
 void sample_sensors()
 {
-    // RtcDateTime now = rtc.GetDateTime();
+    RtcDateTime now = rtc.GetDateTime();
 
     // Sample airt and relh
-    Adafruit_BME680 bme;
+    Adafruit_BME680 bme680;
     bool airt_sampled = false;
     float airt;
     bool relh_sampled = false;
     float relh;
 
-    if (bme.begin(0x76))
+    if (bme680.begin(0x76))
     {
-        bme.setTemperatureOversampling(BME680_OS_8X);
-        bme.setHumidityOversampling(BME680_OS_2X);
+        bme680.setTemperatureOversampling(BME680_OS_8X);
+        bme680.setHumidityOversampling(BME680_OS_2X);
 
-        if (bme.performReading())
+        if (bme680.performReading())
         {
             airt_sampled = true;
-            airt = bme.temperature;
+            airt = bme680.temperature;
             relh_sampled = true;
-            relh = bme.humidity;
+            relh = bme680.humidity;
         }
     }
 
@@ -112,23 +124,14 @@ void sample_sensors()
     float batv;
 
 
-    // // Format the report timestamp
-    // char time[20] = { '\0' };
-    // sprintf(time, "%04u-%02ud-%02u %02u:%02u:%02u", now.Year(), now.Month(),
-    //     now.Day(), now.Hour(), now.Minute(), now.Second());
+    // Format the report timestamp
+    char time[32] = { '\0' };
+    sprintf(time, "%04u-%02u-%02u %02u:%02u:%02u", now.Year(), now.Month(),
+        now.Day(), now.Hour(), now.Minute(), now.Second());
 
     // Generate the report
-    // char report[256] = { '\0' };
-    // const char* report_base = "{ \"node\": \"%s\", \"airt\": %.1f, "
-    //     "\"relh\": %.1f, \"lvis\": %d, \"lifr\": %d, \"batv\": %.2f, \"sigs\": %d }";
-
-    // sprintf(report, report_base, mac_address, airt, relh, lvis, lifr,
-    //     batv, sigs);
-    // Serial.println(report);
-
-
     char report[256] = { '\0' };
-    sprintf(report, "{ \"node\": \"%s\", \"time\": \"%s\"", mac_address, "test");
+    sprintf(report, "{ \"node\": \"%s\", \"time\": \"%s\"", mac_address, time);
 
     if (airt_sampled)
     {
@@ -171,11 +174,14 @@ void sample_sensors()
     else strcat(report, ", \"batv\": null");
 
     strcat(report, " }");
-    Serial.println(report);
 
-    // // Transmit the report
-    // if (network_connect() && broker_connect())
-    //     mqtt_client.publish(broker_topic, report);
+
+    // Transmit the report
+    if (network_connect() && broker_connect())
+    {
+        Serial.println(report);
+        Serial.println(mqtt.publish(broker_topic, report));
+    }
 }
 
 void transmit_reports()
@@ -210,10 +216,12 @@ bool network_connect()
 }
 
 /*
-    Attempts to connect to the MQTT broker once
+    Attempts to connect to the MQTT broker
  */
 bool broker_connect()
 {
+    if (mqtt.connected()) return true;
+
     mqtt.setServer(BROKER_ADDR, BROKER_PORT);
     mqtt.connect(broker_topic);
     return mqtt.connected();
@@ -228,9 +236,12 @@ void update_rtc_time()
     WiFiUDP udp;
     NTPClient ntp(udp);
 
-    ntp.begin();    
+    // Keep trying until successfully got time
+    ntp.begin();
     while (!ntp.forceUpdate())
     ntp.end();
 
-    //rtc.adjust(DateTime(__DATE__, __TIME__));
+    // Subtract 30 years since RTC library uses 2000 epoch but NTP returns time
+    // relative to 1970 epoch
+    rtc.SetDateTime(RtcDateTime(ntp.getEpochTime() - 946684800UL));
 }
