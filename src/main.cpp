@@ -10,25 +10,28 @@
 #include "Adafruit_Sensor.h"
 #include "Adafruit_BME680.h"
 
+#include "main.h"
+#include "helpers.h"
+
 
 const char* NETWORK_ID = "***REMOVED***"; // Wifi SSID
 const char* NETWORK_PASS = "***REMOVED***"; // Wifi password
 const char* BROKER_ADDR = "192.168.0.61"; // MQTT broker address
 const int BROKER_PORT = 1883; // MQTT broker port
 const char* BROKER_BASE = "nodes/"; // MQTT publish topic base path
+const int RTC_SQW_PIN = 19; // Real time clock square wave input pin
 
 char mac_address[18] = { '\0' }; // String for storing the MAC address
 char* broker_topic; // String for storing the topic to publish to
+int report_interval = 2; // Stores the retrieved reporting interval
+bool should_report = false; // Should the loop produce a report?
+
+char new_report[256] = { '\0' };
 
 RtcDS3231<TwoWire> rtc(Wire);
 WiFiClient network;
-PubSubClient mqtt(network);
+PubSubClient broker(network);
 
-
-void update_rtc_time();
-void sample_sensors();
-bool network_connect();
-bool broker_connect();
 
 void setup()
 {
@@ -47,14 +50,13 @@ void setup()
     strcpy(broker_topic, BROKER_BASE);
     strcat(broker_topic, mac_address);
 
-    Serial.println("before");
-
     // Don't continue until connected to Wifi
     while (!network_connect());
 
-    Serial.println("network");
-
     rtc.Begin();
+    rtc.Enable32kHzPin(false);
+    rtc.SetSquareWavePin(DS3231SquareWavePin_ModeAlarmOne);
+    attachInterrupt(RTC_SQW_PIN, rtc_alarm_triggered, FALLING);
 
     // Update RTC stored time if needed (loop until success)
     while (true)
@@ -63,7 +65,7 @@ void setup()
 
         if (rtc.LastError() == 0)
         {
-            if (!isRTCValid) update_rtc_time();
+            if (!isRTCValid) set_rtc_time();
             break;
         }
     }
@@ -71,27 +73,48 @@ void setup()
     // Don't continue until connected to MQTT broker
     while (!broker_connect());
 
-    Serial.println("broker");
+    Serial.println("online");
 
-    // sample_sensors();
+    // Calculate and set alarm to trigger the first report
+    RtcDateTime now = rtc.GetDateTime();
+    now += (60 - now.Second()); // Align to start of next minute
+
+    RtcDateTime alarmTime = round_up(now, report_interval * 60);
+    DS3231AlarmOne alarm(
+        alarmTime.Day(), alarmTime.Hour(), alarmTime.Minute(),
+        alarmTime.Second(), DS3231AlarmOneControl_MinutesSecondsMatch);
+    rtc.SetAlarmOne(alarm);
+    rtc.LatchAlarmsTriggeredFlags();
 }
 
 void loop()
 {
-    RtcDateTime now = rtc.GetDateTime();
-
-    if (now.Second() == 0)
+    if (should_report == true)
     {
-        sample_sensors();
-        delay(1000);
+        RtcDateTime now = rtc.GetDateTime();
+
+        produce_report(now);
+        set_next_alarm(rtc, now, report_interval);
+        should_report = false;
+
+        // Transmit the new report
+        if (network_connect() && broker_connect())
+        {
+            Serial.println(new_report);
+            broker.publish(broker_topic, new_report);
+        }
     }
 }
 
 
-void sample_sensors()
+void rtc_alarm_triggered()
 {
-    RtcDateTime now = rtc.GetDateTime();
+    should_report = true;
+}
 
+
+void produce_report(const RtcDateTime& now)
+{
     // Sample airt and relh
     Adafruit_BME680 bme680;
     bool airt_sampled = false;
@@ -130,63 +153,30 @@ void sample_sensors()
         now.Day(), now.Hour(), now.Minute(), now.Second());
 
     // Generate the report
-    char report[256] = { '\0' };
-    sprintf(report, "{ \"node\": \"%s\", \"time\": \"%s\"", mac_address, time);
+    sprintf(new_report,
+        "{ \"node\": \"%s\", \"time\": \"%s\"", mac_address, time);
 
     if (airt_sampled)
-    {
-        char section[32] = { '\0' };
-        sprintf(section, ", \"airt\": %.1f", airt);
-        strcat(report, section);
-    }
-    else strcat(report, ", \"airt\": null");
+        concat_report_value<float>(new_report, ", \"airt\": %.1f", airt);
+    else strcat(new_report, ", \"airt\": null");
 
     if (relh_sampled)
-    {
-        char section[32] = { '\0' };
-        sprintf(section, ", \"relh\": %.1f", relh);
-        strcat(report, section);
-    }
-    else strcat(report, ", \"relh\": null");
+        concat_report_value<float>(new_report, ", \"relh\": %.1f", relh);
+    else strcat(new_report, ", \"relh\": null");
 
     if (lvis_sampled)
-    {
-        char section[32] = { '\0' };
-        sprintf(section, ", \"lvis\": %d", lvis);
-        strcat(report, section);
-    }
-    else strcat(report, ", \"lvis\": null");
+        concat_report_value<float>(new_report, ", \"lvis\": %.1f", lvis);
+    else strcat(new_report, ", \"lvis\": null");
 
     if (lifr_sampled)
-    {
-        char section[32] = { '\0' };
-        sprintf(section, ", \"lifr\": %d", lifr);
-        strcat(report, section);
-    }
-    else strcat(report, ", \"lifr\": null");
+        concat_report_value<float>(new_report, ", \"lifr\": %.1f", lifr);
+    else strcat(new_report, ", \"lifr\": null");
 
     if (batv_sampled)
-    {
-        char section[32] = { '\0' };
-        sprintf(section, ", \"batv\": %.2f", batv);
-        strcat(report, section);
-    }
-    else strcat(report, ", \"batv\": null");
+        concat_report_value<float>(new_report, ", \"batv\": %.1f", batv);
+    else strcat(new_report, ", \"batv\": null");
 
-    strcat(report, " }");
-
-
-    // Transmit the report
-    if (network_connect() && broker_connect())
-    {
-        Serial.println(report);
-        Serial.println(mqtt.publish(broker_topic, report));
-    }
-}
-
-void transmit_reports()
-{
-    
+    strcat(new_report, " }");
 }
 
 
@@ -220,18 +210,18 @@ bool network_connect()
  */
 bool broker_connect()
 {
-    if (mqtt.connected()) return true;
+    if (broker.connected()) return true;
 
-    mqtt.setServer(BROKER_ADDR, BROKER_PORT);
-    mqtt.connect(broker_topic);
-    return mqtt.connected();
+    broker.setServer(BROKER_ADDR, BROKER_PORT);
+    broker.connect(broker_topic);
+    return broker.connected();
 }
 
 
 /*
     Blocks until RTC time has been sucessfully updated via NTP
  */
-void update_rtc_time()
+void set_rtc_time()
 {
     WiFiUDP udp;
     NTPClient ntp(udp);
