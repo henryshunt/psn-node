@@ -4,9 +4,9 @@
 void setup();
 void loop();
 
-void rtc_alarm_triggered();
+void alarm_triggered();
 
-void produce_report(const RtcDateTime&);
+void generate_report(const RtcDateTime&);
 
 bool network_connect();
 bool broker_connect();

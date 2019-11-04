@@ -8,7 +8,7 @@ int round_up(int number, int multiple);
 
 /*
     Concatenates a parameter and value onto the report
-*/
+ */
 template<typename T>
 void concat_report_value(char* report, const char* value_string, T value)
 {
@@ -17,5 +17,5 @@ void concat_report_value(char* report, const char* value_string, T value)
     strcat(report, section);
 }
 
-void set_next_alarm(RtcDS3231<TwoWire>& rtc, const RtcDateTime& now,
-    int interval);
+RtcDateTime get_next_alarm(const RtcDateTime& time, int interval);
+void set_alarm(RtcDS3231<TwoWire>& rtc, const RtcDateTime& time);

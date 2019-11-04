@@ -4,6 +4,7 @@
 #include <WiFi.h>
 #include <ctime>
 
+#include "CircularBuffer.h"
 #include "RtcDS3231.h"
 #include "NTPClient.h"
 #include "PubSubClient.h"
@@ -20,13 +21,16 @@ const char* BROKER_ADDR = "192.168.0.61"; // MQTT broker address
 const int BROKER_PORT = 1883; // MQTT broker port
 const char* BROKER_BASE = "nodes/"; // MQTT publish topic base path
 const int RTC_SQW_PIN = 19; // Real time clock square wave input pin
+const int BUFFER_LIMIT = 10; // Maximum reports to keep in transmit buffer
 
 char mac_address[18] = { '\0' }; // String for storing the MAC address
 char* broker_topic; // String for storing the topic to publish to
-int report_interval = 2; // Stores the retrieved reporting interval
-bool should_report = false; // Should the loop produce a report?
+bool has_setup = false; // Has the setup method run?
+bool should_report = false; // Should the loop generate a report?
 
-char new_report[256] = { '\0' };
+int report_interval = 1; // Stores the retrieved reporting interval
+
+CircularBuffer<char*, BUFFER_LIMIT> reports; // Stores reports to transmit
 
 RtcDS3231<TwoWire> rtc(Wire);
 WiFiClient network;
@@ -56,7 +60,7 @@ void setup()
     rtc.Begin();
     rtc.Enable32kHzPin(false);
     rtc.SetSquareWavePin(DS3231SquareWavePin_ModeAlarmOne);
-    attachInterrupt(RTC_SQW_PIN, rtc_alarm_triggered, FALLING);
+    attachInterrupt(RTC_SQW_PIN, alarm_triggered, FALLING);
 
     // Update RTC stored time if needed (loop until success)
     while (true)
@@ -72,49 +76,76 @@ void setup()
 
     // Don't continue until connected to MQTT broker
     while (!broker_connect());
-
     Serial.println("online");
 
-    // Calculate and set alarm to trigger the first report
-    RtcDateTime now = rtc.GetDateTime();
-    now += (60 - now.Second()); // Align to start of next minute
+    // Set alarm to trigger the first report
+    RtcDateTime first_alarm = rtc.GetDateTime();
+    first_alarm += (60 - first_alarm.Second()); // Start of next minute
+    first_alarm = round_up(first_alarm, report_interval * 60);
+    has_setup = true;
+    set_alarm(rtc, first_alarm);
 
-    RtcDateTime alarmTime = round_up(now, report_interval * 60);
-    DS3231AlarmOne alarm(
-        alarmTime.Day(), alarmTime.Hour(), alarmTime.Minute(),
-        alarmTime.Second(), DS3231AlarmOneControl_MinutesSecondsMatch);
-    rtc.SetAlarmOne(alarm);
-    rtc.LatchAlarmsTriggeredFlags();
+    // No point sleeping if there's only 10 seconds until wake-up
+    if (first_alarm - rtc.GetDateTime() >= 10)
+    {
+        // Sleep MCU
+    }
 }
 
 void loop()
 {
-    if (should_report == true)
+    if (should_report)
     {
         RtcDateTime now = rtc.GetDateTime();
-
-        produce_report(now);
-        set_next_alarm(rtc, now, report_interval);
         should_report = false;
 
-        // Transmit the new report
+        // Generate new report and set alarm for next report
+        generate_report(now);
+        RtcDateTime next_alarm = now + (report_interval * 60);
+        set_alarm(rtc, next_alarm);
+
+        // Transmit the report
+        if (reports.isEmpty()) return;
+
         if (network_connect() && broker_connect())
         {
-            Serial.println(new_report);
-            broker.publish(broker_topic, new_report);
+            // Check if transmit may clash with next alarm
+            while (!reports.isEmpty() && next_alarm - now >= 10)
+            {
+                char* report = reports.pop();
+                if (!broker.publish(broker_topic, report))
+                {
+                    reports.push(report);
+                    break;
+                }
+                else
+                {
+                    Serial.println(report);
+                    free(report);
+                }
+            }
         }
     }
 }
 
 
-void rtc_alarm_triggered()
+/*
+    Fires when an alarm on the RTC has been triggered
+ */
+void alarm_triggered()
 {
+    if (!has_setup) return;
     should_report = true;
 }
 
 
-void produce_report(const RtcDateTime& now)
+/*
+    Samples the sensors, generates a report and adds it to the buffer
+ */
+void generate_report(const RtcDateTime& now)
 {
+    char* report = (char*)calloc(256, sizeof(char));
+
     // Sample airt and relh
     Adafruit_BME680 bme680;
     bool airt_sampled = false;
@@ -153,30 +184,30 @@ void produce_report(const RtcDateTime& now)
         now.Day(), now.Hour(), now.Minute(), now.Second());
 
     // Generate the report
-    sprintf(new_report,
-        "{ \"node\": \"%s\", \"time\": \"%s\"", mac_address, time);
+    sprintf(report,"{ \"node\": \"%s\", \"time\": \"%s\"", mac_address, time);
 
     if (airt_sampled)
-        concat_report_value<float>(new_report, ", \"airt\": %.1f", airt);
-    else strcat(new_report, ", \"airt\": null");
+        concat_report_value<float>(report, ", \"airt\": %.1f", airt);
+    else strcat(report, ", \"airt\": null");
 
     if (relh_sampled)
-        concat_report_value<float>(new_report, ", \"relh\": %.1f", relh);
-    else strcat(new_report, ", \"relh\": null");
+        concat_report_value<float>(report, ", \"relh\": %.1f", relh);
+    else strcat(report, ", \"relh\": null");
 
     if (lvis_sampled)
-        concat_report_value<float>(new_report, ", \"lvis\": %.1f", lvis);
-    else strcat(new_report, ", \"lvis\": null");
+        concat_report_value<float>(report, ", \"lvis\": %.1f", lvis);
+    else strcat(report, ", \"lvis\": null");
 
     if (lifr_sampled)
-        concat_report_value<float>(new_report, ", \"lifr\": %.1f", lifr);
-    else strcat(new_report, ", \"lifr\": null");
+        concat_report_value<float>(report, ", \"lifr\": %.1f", lifr);
+    else strcat(report, ", \"lifr\": null");
 
     if (batv_sampled)
-        concat_report_value<float>(new_report, ", \"batv\": %.1f", batv);
-    else strcat(new_report, ", \"batv\": null");
+        concat_report_value<float>(report, ", \"batv\": %.1f", batv);
+    else strcat(report, ", \"batv\": null");
 
-    strcat(new_report, " }");
+    strcat(report, " }");
+    reports.push(report);
 }
 
 
