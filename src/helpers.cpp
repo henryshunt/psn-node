@@ -3,6 +3,7 @@
 #include "RtcDS3231.h"
 
 #include "helpers.h"
+#include "buffer.h"
 
 
 /*
@@ -55,4 +56,46 @@ void set_alarm(RtcDS3231<TwoWire>& rtc, const RtcDateTime& time)
         DS3231AlarmOneControl_MinutesSecondsMatch);
     rtc.SetAlarmOne(alarm);
     rtc.LatchAlarmsTriggeredFlags();
+}
+
+/*
+    Serialises the supplied report struct into a JSON string
+ */
+void report_to_string(char* report_out, const report_t& report, char* mac_address)
+{
+    // Format the report timestamp
+    RtcDateTime time = RtcDateTime(report.time);
+    char time_out[20] = { '\0' };
+
+    sprintf(time_out, "%04u-%02u-%02u %02u:%02u:%02u", time.Year(),
+        time.Month(), time.Day(), time.Hour(), time.Minute(), time.Second());
+
+    // Generate the report
+    sprintf(report_out, "{ \"node\": \"%s\", \"time\": \"%s\"", mac_address,
+        time_out);
+
+    Serial.println(report.airt);
+    Serial.println(report.airt_ok);
+
+    // if (report.airt_ok)
+    concat_value<float>(report_out, ", \"airt\": %.1f", report.airt);
+    // else strcat(report_out, ", \"airt\": null");
+
+    // if (report.relh_ok)
+    concat_value<float>(report_out, ", \"relh\": %.1f", report.relh);
+    // else strcat(report_out, ", \"relh\": null");
+
+    if (report.lvis_ok)
+        concat_value<float>(report_out, ", \"lvis\": %.1f", report.lvis);
+    else strcat(report_out, ", \"lvis\": null");
+
+    if (report.lifr_ok)
+        concat_value<float>(report_out, ", \"lifr\": %.1f", report.lifr);
+    else strcat(report_out, ", \"lifr\": null");
+
+    if (report.batv_ok)
+        concat_value<float>(report_out, ", \"batv\": %.1f", report.batv);
+    else strcat(report_out, ", \"batv\": null");
+
+    strcat(report_out, " }");
 }

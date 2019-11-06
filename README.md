@@ -5,7 +5,6 @@ Contains the code to run on individual sensing nodes
 - Open project in PlatformIO
 
 # Dependencies
-- CircularBuffer
 - RtcDS3231
 - NTPClient
 - PubSubClient

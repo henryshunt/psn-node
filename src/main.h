@@ -4,7 +4,7 @@
 void setup();
 void loop();
 
-void alarm_triggered();
+void wake_routine();
 
 void generate_report(const RtcDateTime&);
 

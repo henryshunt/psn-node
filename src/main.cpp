@@ -4,7 +4,6 @@
 #include <WiFi.h>
 #include <ctime>
 
-#include "CircularBuffer.h"
 #include "RtcDS3231.h"
 #include "NTPClient.h"
 #include "PubSubClient.h"
@@ -13,24 +12,23 @@
 
 #include "main.h"
 #include "helpers.h"
+#include "buffer.h"
 
 
-const char* NETWORK_ID = "***REMOVED***"; // Wifi SSID
-const char* NETWORK_PASS = "***REMOVED***"; // Wifi password
-const char* BROKER_ADDR = "192.168.0.61"; // MQTT broker address
-const int BROKER_PORT = 1883; // MQTT broker port
-const char* BROKER_BASE = "nodes/"; // MQTT publish topic base path
-const int RTC_SQW_PIN = 19; // Real time clock square wave input pin
-const int BUFFER_LIMIT = 10; // Maximum reports to keep in transmit buffer
+const char* NETWORK_ID = "***REMOVED***";
+const char* NETWORK_PASS = "***REMOVED***";
+const char* BROKER_ADDR = "192.168.0.61";
+const int BROKER_PORT = 1883;
 
-char mac_address[18] = { '\0' }; // String for storing the MAC address
-char* broker_topic; // String for storing the topic to publish to
-bool has_setup = false; // Has the setup method run?
-bool should_report = false; // Should the loop generate a report?
+const gpio_num_t RTC_SQW_PIN = GPIO_NUM_35;
+#define BUFFER_MAX 5
 
-int report_interval = 1; // Stores the retrieved reporting interval
-
-CircularBuffer<char*, BUFFER_LIMIT> reports; // Stores reports to transmit
+RTC_DATA_ATTR bool was_sleeping = false;
+RTC_DATA_ATTR char mac_address[18] = { '\0' };
+RTC_DATA_ATTR char broker_topic[64] = "nodes/";
+RTC_DATA_ATTR report_buffer_t buffer;
+RTC_DATA_ATTR report_t reports[BUFFER_MAX];
+RTC_DATA_ATTR int report_interval = 1;
 
 RtcDS3231<TwoWire> rtc(Wire);
 WiFiClient network;
@@ -41,118 +39,110 @@ void setup()
 {
     Serial.begin(9600);
 
-    // Get MAC address for identifying the node
-    uint8_t mac_temp[6];
-    esp_efuse_mac_get_default(mac_temp);
-
-    sprintf(mac_address, "%x:%x:%x:%x:%x:%x", mac_temp[0],
-        mac_temp[1], mac_temp[2], mac_temp[3], mac_temp[4], mac_temp[5]);
-
-    // Create MQTT topic from base path and MAC address
-    broker_topic = (char*)calloc(
-        strlen(BROKER_BASE) + strlen(mac_address) + 1, sizeof(char));
-    strcpy(broker_topic, BROKER_BASE);
-    strcat(broker_topic, mac_address);
-
-    // Don't continue until connected to Wifi
-    while (!network_connect());
-
     rtc.Begin();
     rtc.Enable32kHzPin(false);
     rtc.SetSquareWavePin(DS3231SquareWavePin_ModeAlarmOne);
-    attachInterrupt(RTC_SQW_PIN, alarm_triggered, FALLING);
 
-    // Update RTC stored time if needed (loop until success)
-    while (true)
+
+    // If clean boot else woke from sleep
+    if (!was_sleeping)
     {
-        bool isRTCValid = rtc.IsDateTimeValid();
+        // Get MAC address for unique node identification
+        uint8_t mac_temp[6];
+        esp_efuse_mac_get_default(mac_temp);
 
-        if (rtc.LastError() == 0)
+        sprintf(mac_address, "%x:%x:%x:%x:%x:%x", mac_temp[0],
+            mac_temp[1], mac_temp[2], mac_temp[3], mac_temp[4], mac_temp[5]);
+        strcat(broker_topic, mac_address);
+
+        // Don't continue until connected to Wifi
+        while (!network_connect());
+
+        // Update RTC stored time if needed (loop until success)
+        while (true)
         {
-            if (!isRTCValid) set_rtc_time();
-            break;
+            bool isRTCValid = rtc.IsDateTimeValid();
+
+            if (rtc.LastError() == 0)
+            {
+                if (!isRTCValid) set_rtc_time();
+                break;
+            }
         }
+
+        // Don't continue until connected to MQTT broker
+        while (!broker_connect());
+
+        buffer.MAX_SIZE = BUFFER_MAX;
+
+        // Set alarm to trigger the first report then enter deep sleep
+        RtcDateTime first_alarm = rtc.GetDateTime();
+        first_alarm += (60 - first_alarm.Second());
+        first_alarm = round_up(first_alarm, report_interval * 60);
+        set_alarm(rtc, first_alarm);
+
+        was_sleeping = true;
+        esp_sleep_enable_ext0_wakeup(RTC_SQW_PIN, 0);
+        esp_deep_sleep_start();
     }
-
-    // Don't continue until connected to MQTT broker
-    while (!broker_connect());
-    Serial.println("online");
-
-    // Set alarm to trigger the first report
-    RtcDateTime first_alarm = rtc.GetDateTime();
-    first_alarm += (60 - first_alarm.Second()); // Start of next minute
-    first_alarm = round_up(first_alarm, report_interval * 60);
-    has_setup = true;
-    set_alarm(rtc, first_alarm);
-
-    // No point sleeping if there's only 10 seconds until wake-up
-    if (first_alarm - rtc.GetDateTime() >= 10)
+    else
     {
-        // Sleep MCU
+        was_sleeping = false;
+        wake_routine();
     }
 }
 
-void loop()
+void loop() { }
+
+
+void wake_routine()
 {
-    if (should_report)
+    RtcDateTime now = rtc.GetDateTime();
+    Serial.println("wake");
+
+    // Generate report and set alarm for next report
+    generate_report(now);
+    RtcDateTime next_alarm = now + (report_interval * 60);
+    set_alarm(rtc, next_alarm);
+
+    // Transmit reports in buffer
+    if (!buffer.is_empty() && network_connect() && broker_connect())
     {
-        RtcDateTime now = rtc.GetDateTime();
-        should_report = false;
-
-        // Generate new report and set alarm for next report
-        generate_report(now);
-        RtcDateTime next_alarm = now + (report_interval * 60);
-        set_alarm(rtc, next_alarm);
-
-        // Transmit the report
-        if (reports.isEmpty()) return;
-
-        if (network_connect() && broker_connect())
+        // Check if transmit may clash with next alarm
+        while (!buffer.is_empty() && next_alarm - now >= 10)
         {
-            // Check if transmit may clash with next alarm
-            while (!reports.isEmpty() && next_alarm - now >= 10)
+            report_t report = buffer.pop_rear(reports);
+            char report_json[256] = { '\0' };
+
+            report_to_string(report_json, report, mac_address);
+            Serial.println(report_json);
+
+            if (!broker.publish(broker_topic, report_json))
             {
-                char* report = reports.pop();
-                if (!broker.publish(broker_topic, report))
-                {
-                    reports.push(report);
-                    break;
-                }
-                else
-                {
-                    Serial.println(report);
-                    free(report);
-                }
+                Serial.println("fail");
+                buffer.push_rear(reports, report);
+                break;
             }
         }
     }
-}
 
-
-/*
-    Fires when an alarm on the RTC has been triggered
- */
-void alarm_triggered()
-{
-    if (!has_setup) return;
-    should_report = true;
+    // Enter deep sleep
+    was_sleeping = true;
+    esp_sleep_enable_ext0_wakeup(RTC_SQW_PIN, 0);
+    esp_deep_sleep_start();
 }
 
 
 /*
     Samples the sensors, generates a report and adds it to the buffer
  */
-void generate_report(const RtcDateTime& now)
+void generate_report(const RtcDateTime& time)
 {
-    char* report = (char*)calloc(256, sizeof(char));
+    report_t report;
+    report.time = time;
 
     // Sample airt and relh
     Adafruit_BME680 bme680;
-    bool airt_sampled = false;
-    float airt;
-    bool relh_sampled = false;
-    float relh;
-
     if (bme680.begin(0x76))
     {
         bme680.setTemperatureOversampling(BME680_OS_8X);
@@ -160,54 +150,21 @@ void generate_report(const RtcDateTime& now)
 
         if (bme680.performReading())
         {
-            airt_sampled = true;
-            airt = bme680.temperature;
-            relh_sampled = true;
-            relh = bme680.humidity;
+            report.airt = bme680.temperature;
+            report.airt_ok = true;
+            report.relh = bme680.humidity;
+            report.relh_ok = true;
         }
     }
 
     // Sample lvis and lifr
-    bool lvis_sampled = false;
-    int lvis;
-    bool lifr_sampled = false;
-    int lifr;
+    // report.lvis = ...
+    // report.lifr = ...
 
     // Sample batv
-    bool batv_sampled = false;
-    float batv;
+    // report.batv = ...
 
-
-    // Format the report timestamp
-    char time[32] = { '\0' };
-    sprintf(time, "%04u-%02u-%02u %02u:%02u:%02u", now.Year(), now.Month(),
-        now.Day(), now.Hour(), now.Minute(), now.Second());
-
-    // Generate the report
-    sprintf(report,"{ \"node\": \"%s\", \"time\": \"%s\"", mac_address, time);
-
-    if (airt_sampled)
-        concat_report_value<float>(report, ", \"airt\": %.1f", airt);
-    else strcat(report, ", \"airt\": null");
-
-    if (relh_sampled)
-        concat_report_value<float>(report, ", \"relh\": %.1f", relh);
-    else strcat(report, ", \"relh\": null");
-
-    if (lvis_sampled)
-        concat_report_value<float>(report, ", \"lvis\": %.1f", lvis);
-    else strcat(report, ", \"lvis\": null");
-
-    if (lifr_sampled)
-        concat_report_value<float>(report, ", \"lifr\": %.1f", lifr);
-    else strcat(report, ", \"lifr\": null");
-
-    if (batv_sampled)
-        concat_report_value<float>(report, ", \"batv\": %.1f", batv);
-    else strcat(report, ", \"batv\": null");
-
-    strcat(report, " }");
-    reports.push(report);
+    buffer.push_front(reports, report);
 }
 
 
