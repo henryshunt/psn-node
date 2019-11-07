@@ -7,6 +7,6 @@ Contains the code to run on individual sensing nodes
 # Dependencies
 - RtcDS3231
 - NTPClient
-- PubSubClient
+- AsyncMQTTClient
 - Adafruit Unified Sensor
 - Adafruit BME680

@@ -74,8 +74,8 @@ void report_to_string(char* report_out, const report_t& report, char* mac_addres
     sprintf(report_out, "{ \"node\": \"%s\", \"time\": \"%s\"", mac_address,
         time_out);
 
-    Serial.println(report.airt);
-    Serial.println(report.airt_ok);
+    // Serial.println(report.airt);
+    // Serial.println(report.airt_ok);
 
     // if (report.airt_ok)
     concat_value<float>(report_out, ", \"airt\": %.1f", report.airt);

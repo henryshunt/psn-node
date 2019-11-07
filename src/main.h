@@ -3,12 +3,12 @@
 
 void setup();
 void loop();
-
-void wake_routine();
+void wakeup_routine();
 
 void generate_report(const RtcDateTime&);
 
-bool network_connect();
-bool broker_connect();
+bool connect_network();
+bool connect_broker();
+bool broker_publish(const char*, const char*);
 
 void set_rtc_time();

@@ -6,7 +6,7 @@
 
 #include "RtcDS3231.h"
 #include "NTPClient.h"
-#include "PubSubClient.h"
+#include "AsyncMqttClient.h"
 #include "Adafruit_Sensor.h"
 #include "Adafruit_BME680.h"
 
@@ -28,11 +28,16 @@ RTC_DATA_ATTR char mac_address[18] = { '\0' };
 RTC_DATA_ATTR char broker_topic[64] = "nodes/";
 RTC_DATA_ATTR report_buffer_t buffer;
 RTC_DATA_ATTR report_t reports[BUFFER_MAX];
+
 RTC_DATA_ATTR int report_interval = 1;
 
+#define NETWORK_TIMEOUT 10
+#define BROKER_TIMEOUT 10
+#define BROKER_PUBLISH_TIMEOUT 5
+#define PRE_ALARM_SLEEP_TIME 5
+
 RtcDS3231<TwoWire> rtc(Wire);
-WiFiClient network;
-PubSubClient broker(network);
+AsyncMqttClient broker;
 
 
 void setup()
@@ -43,8 +48,6 @@ void setup()
     rtc.Enable32kHzPin(false);
     rtc.SetSquareWavePin(DS3231SquareWavePin_ModeAlarmOne);
 
-
-    // If clean boot else woke from sleep
     if (!was_sleeping)
     {
         // Get MAC address for unique node identification
@@ -54,11 +57,11 @@ void setup()
         sprintf(mac_address, "%x:%x:%x:%x:%x:%x", mac_temp[0],
             mac_temp[1], mac_temp[2], mac_temp[3], mac_temp[4], mac_temp[5]);
         strcat(broker_topic, mac_address);
-
+    
         // Don't continue until connected to Wifi
-        while (!network_connect());
+        while (!connect_network());
 
-        // Update RTC stored time if needed (loop until success)
+        // Don't continue until RTC time valid (update if required)
         while (true)
         {
             bool isRTCValid = rtc.IsDateTimeValid();
@@ -71,7 +74,7 @@ void setup()
         }
 
         // Don't continue until connected to MQTT broker
-        while (!broker_connect());
+        while (!connect_broker());
 
         buffer.MAX_SIZE = BUFFER_MAX;
 
@@ -79,6 +82,9 @@ void setup()
         RtcDateTime first_alarm = rtc.GetDateTime();
         first_alarm += (60 - first_alarm.Second());
         first_alarm = round_up(first_alarm, report_interval * 60);
+
+        if (first_alarm - rtc.GetDateTime() <= PRE_ALARM_SLEEP_TIME)
+            first_alarm += report_interval * 60;
         set_alarm(rtc, first_alarm);
 
         was_sleeping = true;
@@ -88,17 +94,18 @@ void setup()
     else
     {
         was_sleeping = false;
-        wake_routine();
+        wakeup_routine();
     }
 }
 
 void loop() { }
 
-
-void wake_routine()
+/*
+    Generates a report, sets next alarm, transmits reports, goes to sleep
+ */
+void wakeup_routine()
 {
     RtcDateTime now = rtc.GetDateTime();
-    Serial.println("wake");
 
     // Generate report and set alarm for next report
     generate_report(now);
@@ -106,10 +113,11 @@ void wake_routine()
     set_alarm(rtc, next_alarm);
 
     // Transmit reports in buffer
-    if (!buffer.is_empty() && network_connect() && broker_connect())
+    if (!buffer.is_empty() && connect_network() && connect_broker())
     {
         // Check if transmit may clash with next alarm
-        while (!buffer.is_empty() && next_alarm - now >= 10)
+        while (!buffer.is_empty() && next_alarm - now
+            >= BROKER_PUBLISH_TIMEOUT + PRE_ALARM_SLEEP_TIME)
         {
             report_t report = buffer.pop_rear(reports);
             char report_json[256] = { '\0' };
@@ -117,9 +125,8 @@ void wake_routine()
             report_to_string(report_json, report, mac_address);
             Serial.println(report_json);
 
-            if (!broker.publish(broker_topic, report_json))
+            if (!broker_publish(broker_topic, report_json))
             {
-                Serial.println("fail");
                 buffer.push_rear(reports, report);
                 break;
             }
@@ -169,19 +176,17 @@ void generate_report(const RtcDateTime& time)
 
 
 /*
-    Blocks until connected to Wifi or timeout after 10 seconds
+    Blocks until connected to Wifi or times out after 10 seconds
  */
-bool network_connect()
+bool connect_network()
 {
-    if (WiFi.status() == WL_CONNECTED) return true;
-
-    int checks = 0;
     WiFi.begin(NETWORK_ID, NETWORK_PASS);
-
-    // Check connection status and timeout after 10 seconds
+    delay(1000);
+    
+    int checks = 0;
     while (WiFi.status() != WL_CONNECTED)
     {
-        if (checks++ < 11)
+        if (checks++ < NETWORK_TIMEOUT - 1)
             delay(1000);
         else
         {
@@ -194,20 +199,60 @@ bool network_connect()
 }
 
 /*
-    Attempts to connect to the MQTT broker
+    Blocks until connected to MQTT broker or times out after 10 seconds
  */
-bool broker_connect()
+bool connect_broker()
 {
-    if (broker.connected()) return true;
-
     broker.setServer(BROKER_ADDR, BROKER_PORT);
-    broker.connect(broker_topic);
-    return broker.connected();
+    broker.connect();
+    delay(1000);
+
+    int checks = 0;
+    while (!broker.connected())
+    {
+        if (checks++ < BROKER_TIMEOUT - 1)
+            delay(1000);
+        else
+        {
+            broker.disconnect();
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/*
+    Blocks until message is published or times out after 10 seconds
+ */
+bool broker_publish(const char* topic, const char* message)
+{
+    int result = -1;
+    result = broker.publish(broker_topic, 1, false, message);
+    delay(1000);
+    
+    int checks = 0;
+    while (result <= 0)
+    {
+        if (result == 0) return false;
+        if (result == -1)
+        {
+            if (checks++ < BROKER_PUBLISH_TIMEOUT - 1)
+                delay(1000);
+            else
+            {
+                broker.disconnect();
+                return false;
+            }
+        }
+    }
+
+    return true;
 }
 
 
 /*
-    Blocks until RTC time has been sucessfully updated via NTP
+    Blocks until RTC time has been set to time retrieved via NTP
  */
 void set_rtc_time()
 {
@@ -216,10 +261,19 @@ void set_rtc_time()
 
     // Keep trying until successfully got time
     ntp.begin();
-    while (!ntp.forceUpdate())
-    ntp.end();
 
-    // Subtract 30 years since RTC library uses 2000 epoch but NTP returns time
-    // relative to 1970 epoch
-    rtc.SetDateTime(RtcDateTime(ntp.getEpochTime() - 946684800UL));
+    while (true)
+    {
+        bool update = ntp.forceUpdate();
+
+        if (update)
+        {
+            // Subtract 30 years since RTC library uses 2000 epoch but NTP
+            // returns time relative to 1970 epoch
+            rtc.SetDateTime(RtcDateTime(ntp.getEpochTime() - 946684800UL));
+            if (rtc.LastError() == 0) break;
+        }
+    }
+
+    ntp.end();
 }
