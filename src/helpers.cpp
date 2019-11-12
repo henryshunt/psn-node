@@ -34,19 +34,6 @@ int round_up(int number, int multiple)
 }
 
 /*
-    Calculates the next alarm time based on the required interval
- */
-RtcDateTime get_next_alarm(const RtcDateTime& time, int interval)
-{
-    // * 60 converts minutes (interval) to seconds (time)
-    RtcDateTime next_alarm = round_up(time, interval * 60);
-
-    if (next_alarm == time)
-        return round_up(time + 1, interval * 60);
-    else return next_alarm;
-}
-
-/*
     Sets the RTC alarm to the specified time
  */
 void set_alarm(RtcDS3231<TwoWire>& rtc, const RtcDateTime& time)
@@ -61,21 +48,10 @@ void set_alarm(RtcDS3231<TwoWire>& rtc, const RtcDateTime& time)
 /*
     Serialises the supplied report struct into a JSON string
  */
-void report_to_string(char* report_out, const report_t& report, char* mac_address)
+void report_to_string(char* report_out, const report_t& report,
+    int session_id, char* mac_address)
 {
-    // Format the report timestamp
-    RtcDateTime time = RtcDateTime(report.time);
-    char time_out[20] = { '\0' };
-
-    sprintf(time_out, "%04u-%02u-%02u %02u:%02u:%02u", time.Year(),
-        time.Month(), time.Day(), time.Hour(), time.Minute(), time.Second());
-
-    // Generate the report
-    sprintf(report_out, "{ \"node\": \"%s\", \"time\": \"%s\"", mac_address,
-        time_out);
-
-    // Serial.println(report.airt);
-    // Serial.println(report.airt_ok);
+    sprintf(report_out, "{ \"session\": %d", session_id);
 
     // if (report.airt_ok)
     concat_value<float>(report_out, ", \"airt\": %.1f", report.airt);

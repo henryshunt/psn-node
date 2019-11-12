@@ -2,13 +2,13 @@
 #include <Wire.h>
 #include <WiFiUdp.h>
 #include <WiFi.h>
-#include <ctime>
 
 #include "RtcDS3231.h"
 #include "NTPClient.h"
 #include "AsyncMqttClient.h"
 #include "Adafruit_Sensor.h"
 #include "Adafruit_BME680.h"
+#include "ArduinoJson.h"
 
 #include "main.h"
 #include "helpers.h"
@@ -21,20 +21,30 @@ const char* BROKER_ADDR = "192.168.0.61";
 const int BROKER_PORT = 1883;
 
 const gpio_num_t RTC_SQW_PIN = GPIO_NUM_35;
-#define BUFFER_MAX 5
+#define PRE_ALARM_SLEEP_TIME 5
+#define BUFFER_MAX 10
+
+#define NETWORK_CONNECT_TIMEOUT 10
+#define BROKER_CONNECT_TIMEOUT 10
+#define BROKER_SUBSCRIBE_TIMEOUT 6
+bool awaiting_subscribe = false;
+uint16_t subscribe_req_id = 0;
+#define BROKER_SESSION_TIMEOUT 10
+bool awaiting_session = false;
+char session_req_id[11] = { '\0' };
+#define BROKER_REPORT_TIMEOUT 8
+bool awaiting_report = false;
+char report_req_id[11] = { '\0' };
+ReportResult
+    report_req_result = ReportResult::None;
 
 RTC_DATA_ATTR bool was_sleeping = false;
 RTC_DATA_ATTR char mac_address[18] = { '\0' };
-RTC_DATA_ATTR char broker_topic[64] = "nodes/";
+RTC_DATA_ATTR int session_id = -1;
+RTC_DATA_ATTR int session_interval = -1;
+RTC_DATA_ATTR int session_batch_size = -1;
 RTC_DATA_ATTR report_buffer_t buffer;
 RTC_DATA_ATTR report_t reports[BUFFER_MAX];
-
-RTC_DATA_ATTR int report_interval = 1;
-
-#define NETWORK_TIMEOUT 10
-#define BROKER_TIMEOUT 10
-#define BROKER_PUBLISH_TIMEOUT 5
-#define PRE_ALARM_SLEEP_TIME 5
 
 RtcDS3231<TwoWire> rtc(Wire);
 AsyncMqttClient broker;
@@ -50,95 +60,86 @@ void setup()
 
     if (!was_sleeping)
     {
-        // Get MAC address for unique node identification
-        uint8_t mac_temp[6];
-        esp_efuse_mac_get_default(mac_temp);
+        // Get MAC address for unique identification of the node
+        uint8_t mac_out[6];
+        esp_efuse_mac_get_default(mac_out);
 
-        sprintf(mac_address, "%x:%x:%x:%x:%x:%x", mac_temp[0],
-            mac_temp[1], mac_temp[2], mac_temp[3], mac_temp[4], mac_temp[5]);
-        strcat(broker_topic, mac_address);
-    
-        // Don't continue until connected to Wifi
-        while (!connect_network());
+        sprintf(mac_address, "%x:%x:%x:%x:%x:%x", mac_out[0], mac_out[1],
+            mac_out[2], mac_out[3], mac_out[4], mac_out[5]);
 
-        // Don't continue until RTC time valid (update if required)
+        // Perform network related setup and config (loop until success)
         while (true)
         {
-            bool isRTCValid = rtc.IsDateTimeValid();
-
-            if (rtc.LastError() == 0)
-            {
-                if (!isRTCValid) set_rtc_time();
-                break;
-            }
+            if (network_connect() && broker_connect() && broker_subscribe()
+                && broker_session()) break;
         }
 
-        // Don't continue until connected to MQTT broker
-        while (!connect_broker());
+        // No session for this node so go to sleep permanently
+        if (session_id == -1) esp_deep_sleep_start();
 
         buffer.MAX_SIZE = BUFFER_MAX;
 
-        // Set alarm to trigger the first report then enter deep sleep
         RtcDateTime first_alarm = rtc.GetDateTime();
         first_alarm += (60 - first_alarm.Second());
-        first_alarm = round_up(first_alarm, report_interval * 60);
+        first_alarm = round_up(first_alarm, session_interval * 60);
 
+        // Leave at least 5 seconds between sleep and wake
         if (first_alarm - rtc.GetDateTime() <= PRE_ALARM_SLEEP_TIME)
-            first_alarm += report_interval * 60;
-        set_alarm(rtc, first_alarm);
+            first_alarm += session_interval * 60;
 
-        was_sleeping = true;
+        // Set alarm for first report and go to sleep
+        set_alarm(rtc, first_alarm);
         esp_sleep_enable_ext0_wakeup(RTC_SQW_PIN, 0);
+        was_sleeping = true;
         esp_deep_sleep_start();
     }
-    else
-    {
-        was_sleeping = false;
-        wakeup_routine();
-    }
+    else wake_routine();
 }
 
 void loop() { }
 
+
 /*
     Generates a report, sets next alarm, transmits reports, goes to sleep
  */
-void wakeup_routine()
+void wake_routine()
 {
     RtcDateTime now = rtc.GetDateTime();
-
-    // Generate report and set alarm for next report
+    RtcDateTime next_alarm = now + (session_interval * 60);
     generate_report(now);
-    RtcDateTime next_alarm = now + (report_interval * 60);
-    set_alarm(rtc, next_alarm);
 
-    // Transmit reports in buffer
-    if (!buffer.is_empty() && connect_network() && connect_broker())
+    // Transmit reports in buffer (only if there's enough reports)
+    if (buffer.count >= session_batch_size && network_connect()
+        && broker_connect() && broker_subscribe())
     {
-        // Check if transmit may clash with next alarm
+        // Only transmit if there's enough time before next alarm
         while (!buffer.is_empty() && next_alarm - now
-            >= BROKER_PUBLISH_TIMEOUT + PRE_ALARM_SLEEP_TIME)
+            >= BROKER_REPORT_TIMEOUT + PRE_ALARM_SLEEP_TIME)
         {
             report_t report = buffer.pop_rear(reports);
-            char report_json[256] = { '\0' };
-
-            report_to_string(report_json, report, mac_address);
+            char report_json[128] = { '\0' };
+            report_to_string(report_json, report, session_id, mac_address);
             Serial.println(report_json);
 
-            if (!broker_publish(broker_topic, report_json))
+            if (!broker_report(report_json, report.time))
             {
                 buffer.push_rear(reports, report);
                 break;
             }
+            else
+            {
+                // Session has ended so go to sleep permanently
+                if (report_req_result == ReportResult::NoSession)
+                    esp_deep_sleep_start();
+            }
         }
     }
 
-    // Enter deep sleep
-    was_sleeping = true;
+    // Set alarm for next report and go to sleep
+    set_alarm(rtc, next_alarm);
     esp_sleep_enable_ext0_wakeup(RTC_SQW_PIN, 0);
     esp_deep_sleep_start();
 }
-
 
 /*
     Samples the sensors, generates a report and adds it to the buffer
@@ -176,104 +177,212 @@ void generate_report(const RtcDateTime& time)
 
 
 /*
-    Blocks until connected to Wifi or times out after 10 seconds
+    Connects to wifi network or times out (blocking)
  */
-bool connect_network()
+bool network_connect()
 {
+    if (WiFi.status() == WL_CONNECTED) return true;
+
     WiFi.begin(NETWORK_ID, NETWORK_PASS);
     delay(1000);
-    
+
+    // Check connection status and timeout after set time
     int checks = 0;
     while (WiFi.status() != WL_CONNECTED)
     {
-        if (checks++ < NETWORK_TIMEOUT - 1)
-            delay(1000);
-        else
-        {
-            WiFi.disconnect();
+        if (checks++ == NETWORK_CONNECT_TIMEOUT)
             return false;
-        }
+        else delay(1000);
     }
 
     return true;
 }
 
 /*
-    Blocks until connected to MQTT broker or times out after 10 seconds
+    Connects to MQTT broker or times out (blocking)
  */
-bool connect_broker()
+bool broker_connect()
 {
+    if (broker.connected()) return true;
+
+    broker.onSubscribe(broker_on_subscribe);
+    broker.onMessage(broker_on_message);
     broker.setServer(BROKER_ADDR, BROKER_PORT);
     broker.connect();
     delay(1000);
 
+    // Check connection status and timeout after set time
     int checks = 0;
     while (!broker.connected())
     {
-        if (checks++ < BROKER_TIMEOUT - 1)
-            delay(1000);
-        else
-        {
-            broker.disconnect();
+        if (checks++ == BROKER_CONNECT_TIMEOUT)
             return false;
-        }
+        else delay(1000);
     }
 
     return true;
 }
 
 /*
-    Blocks until message is published or times out after 10 seconds
+    Subscribes to inbound topic, waits for response or times out (blocking)
  */
-bool broker_publish(const char* topic, const char* message)
+bool broker_subscribe()
 {
-    int result = -1;
-    result = broker.publish(broker_topic, 1, false, message);
-    delay(1000);
-    
-    int checks = 0;
-    while (result <= 0)
+    char inbound_topic[64] = { '\0' };
+    sprintf(inbound_topic, "nodes/%s/inbound/#", mac_address);
+    uint16_t result = broker.subscribe(inbound_topic, 1);
+
+    // Check if successfully sent subscribe request
+    if (result)
     {
-        if (result == 0) return false;
-        if (result == -1)
+        subscribe_req_id = result;
+        awaiting_subscribe = true;
+    } else return false;
+    delay(1000);
+
+    // Check result status and timeout after set time
+    int checks = 0;
+    while (awaiting_subscribe)
+    {
+        if (checks++ == BROKER_SUBSCRIBE_TIMEOUT)
         {
-            if (checks++ < BROKER_PUBLISH_TIMEOUT - 1)
-                delay(1000);
-            else
+            awaiting_subscribe = false;
+            return false;
+        } else delay(1000);
+    }
+
+    return true;
+}
+
+/*
+    Sends session request, waits for response or times out (blocking)
+ */
+bool broker_session()
+{
+    char outbound_topic[64] = { '\0' };
+    sprintf(session_req_id, "%lu", rtc.GetDateTime() + 946684800UL);
+    sprintf(outbound_topic, "nodes/%s/outbound/%s", mac_address,
+        session_req_id);
+
+    uint16_t result = broker.publish(outbound_topic, 1, false, "get_session");
+
+    // Check if successfully sent session request
+    if (result)
+        awaiting_session = true;
+    else return false;
+    delay(1000);
+
+    // Check result status and timeout after set time
+    int checks = 0;
+    while (awaiting_session)
+    {
+        if (checks++ == BROKER_SESSION_TIMEOUT)
+        {
+            awaiting_session = false;
+            return false;
+        } else delay(1000);
+    }
+
+    return true;
+}
+
+/*
+    Sends report, waits for response or times out (blocking)
+ */
+bool broker_report(const char* report, uint32_t time)
+{
+    char reports_topic[64] = { '\0' };
+    sprintf(report_req_id, "%lu", time + 946684800UL);
+    sprintf(reports_topic, "nodes/%s/reports/%s", mac_address,
+        report_req_id);
+
+    report_req_result = ReportResult::None;
+    uint16_t result = broker.publish(reports_topic, 1, false, report);
+
+    // Check if successfully sent report
+    if (result)
+        awaiting_report = true;
+    else return false;
+    delay(1000);
+
+    // Check result status and timeout after set time
+    int checks = 0;
+    while (awaiting_report)
+    {
+        if (checks++ == BROKER_REPORT_TIMEOUT)
+        {
+            awaiting_report = false;
+            return false;
+        } else delay(1000);
+    }
+
+    return true;
+}
+
+
+/*
+    Called when the MQTT broker receives a subscription acknowledgement
+ */
+void broker_on_subscribe(uint16_t packet_id, uint8_t qos)
+{
+    if (awaiting_subscribe && packet_id == subscribe_req_id)
+        awaiting_subscribe = false;
+}
+
+/*
+    Called when the MQTT broker receives a message
+ */
+void broker_on_message(char* topic, char* payload,
+    AsyncMqttClientMessageProperties properties, size_t length, size_t index,
+    size_t total)
+{
+    // Get the ID of the received message
+    char message_id[11] = { '\0' };
+    std::string topic_str = std::string(topic);
+    std::string topic_substring
+        = topic_str.substr(topic_str.find_last_of('/') + 1);
+    memcpy(message_id, topic_substring.c_str(), 10);
+
+    // Copy message into memory to remove unwanted trailing characters
+    char* message = (char*)calloc(length + 1, sizeof(char));
+    memcpy(message, payload, length);
+
+    // Process the received message
+    if (awaiting_session)
+    {
+        if (strcmp(message_id, session_req_id) == 0)
+        {
+            // If got a session then extract the session info
+            if (strcmp(message, "no_session") != 0)
             {
-                broker.disconnect();
-                return false;
+                StaticJsonDocument<300> document;
+                DeserializationError deser = deserializeJson(document, message);
+                
+                if (deser == DeserializationError::Ok)
+                {
+                    session_id = document["session"];
+                    session_interval = document["interval"];
+                    session_batch_size = document["batch_size"];
+                    awaiting_session = false;
+                }
+            }
+            else awaiting_session = false;
+        }
+    }
+    else if (awaiting_report)
+    {
+        if (strcmp(message_id, report_req_id) == 0)
+        {
+            if (strcmp(message, "ok") == 0)
+            {
+                report_req_result = ReportResult::Ok;
+                awaiting_report = false;
+            }
+            else if (strcmp(message, "no_session") == 0)
+            {
+                report_req_result = ReportResult::NoSession;
+                awaiting_report = false;
             }
         }
     }
-
-    return true;
-}
-
-
-/*
-    Blocks until RTC time has been set to time retrieved via NTP
- */
-void set_rtc_time()
-{
-    WiFiUDP udp;
-    NTPClient ntp(udp);
-
-    // Keep trying until successfully got time
-    ntp.begin();
-
-    while (true)
-    {
-        bool update = ntp.forceUpdate();
-
-        if (update)
-        {
-            // Subtract 30 years since RTC library uses 2000 epoch but NTP
-            // returns time relative to 1970 epoch
-            rtc.SetDateTime(RtcDateTime(ntp.getEpochTime() - 946684800UL));
-            if (rtc.LastError() == 0) break;
-        }
-    }
-
-    ntp.end();
 }

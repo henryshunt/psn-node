@@ -30,11 +30,17 @@ private:
 
     bool is_full()
     {
-        return ((front + 1) % MAX_SIZE == rear) ? true : false;
+        return (count == MAX_SIZE) ? true : false;
     }
 
 public:
     int MAX_SIZE = 1; // Should be const but must be set externally
+    int count = 0;
+
+    bool is_empty()
+    {
+        return (count == 0) ? true : false;
+    }
 
     /*
         Adds an element to the front of the buffer
@@ -51,6 +57,7 @@ public:
 
         if (is_full())
             rear = (rear + 1) % MAX_SIZE;
+        else count += 1;
     }
 
     /*
@@ -64,7 +71,9 @@ public:
         elements[rear].lvis = report.lvis;
         elements[rear].lifr = report.lifr;
         elements[rear].batv = report.batv;
+
         rear = (rear - 1) % MAX_SIZE;
+        count += 1;
     }
 
     /*
@@ -74,12 +83,8 @@ public:
     {
         report_t report = elements[rear];
         rear = (rear + 1) % MAX_SIZE;
+        count -=1;
         return report;
-    }
-
-    bool is_empty()
-    {
-        return (front == rear) ? true : false;
     }
 };
 
