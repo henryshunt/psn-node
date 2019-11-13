@@ -1,26 +1,14 @@
 #include "RtcDS3231.h"
 
+#include "helpers.h"
+
+
 #ifndef BUFFER_H
 #define BUFFER_H
 
-struct report_t
-{
-    uint32_t time;
-    float airt = 0;
-    bool airt_ok = false;
-    float relh = 0;
-    bool relh_ok = false;
-    int lvis = 0;
-    bool lvis_ok = false;
-    int lifr = 0;
-    bool lifr_ok = false;
-    float batv = 0;
-    bool batv_ok = false;
-};
-
 /*
-    A limited implementation of a circular buffer, designed specifically for
-    this use case
+    Limited implementation of a circular buffer, designed specifically for this
+    use case (due to limitations posed by ESP32 sleep memory)
  */
 struct report_buffer_t
 {
@@ -28,15 +16,21 @@ private:
     int front = 0;
     int rear = 0;
 
+    /*
+        Determines whether the buffer can fit no more elements in
+     */
     bool is_full()
     {
         return (count == MAX_SIZE) ? true : false;
     }
 
 public:
-    int MAX_SIZE = 1; // Should be const but must be set externally
+    int MAX_SIZE = 1; // Should be const but has to be set externally
     int count = 0;
 
+    /*
+        Determines whether the buffer has no elements in
+     */
     bool is_empty()
     {
         return (count == 0) ? true : false;
