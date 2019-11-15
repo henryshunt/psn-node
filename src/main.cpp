@@ -35,7 +35,7 @@ const gpio_num_t RTC_SQW_PIN = GPIO_NUM_35;
 
 // Network related
 bool awaiting_subscribe = false;
-uint16_t subscribe_req_id = 0;
+uint16_t subscribe_req_id = -1;
 bool awaiting_session = false;
 char session_req_id[11] = { '\0' };
 bool awaiting_report = false;
@@ -71,13 +71,40 @@ void setup()
         sprintf(mac_address, "%x:%x:%x:%x:%x:%x", mac_out[0], mac_out[1],
             mac_out[2], mac_out[3], mac_out[4], mac_out[5]);
 
-        // Perform network related setup and config and reboot if anything fails
+        // Connect to network and logging server and reboot on failure
         // NOTE: I cannot fully guarantee these functions will work properly
         // when called multiple times. The only way to ensure the system is not
-        // left in an unrecoverable state is to perform a full MCU restart.
-        if (!network_connect() || !update_rtc_time() || !logger_connect()
-                || !logger_subscribe() || !logger_session())
-            esp_restart();
+        // left in an unrecoverable state is to perform a full restart.
+        if (!network_connect() || !logger_connect()) esp_restart();
+
+        // Update RTC time if required and restart device if disconnected
+        while (true)
+        {
+            if (!update_rtc_time())
+            {
+                if (WiFi.status() != WL_CONNECTED) esp_restart();
+            } else break;
+        }
+
+        // Subscribe to inbound topic and restart device if disconnected
+        while (true)
+        {
+            if (!logger_subscribe())
+            {
+                if (WiFi.status() != WL_CONNECTED || !logger.connected())
+                    esp_restart();
+            } else break;
+        }
+
+        // Request session for this node and restart device if disconnected
+        while (true)
+        {
+            if (!logger_session())
+            {
+                if (WiFi.status() != WL_CONNECTED || !logger.connected())
+                    esp_restart();
+            } else break;
+        }
 
         // No session for this node so go to sleep permanently
         if (session_id == -1) esp_deep_sleep_start();
@@ -126,7 +153,7 @@ void wake_routine()
         {
             report_t report = buffer.pop_rear(reports);
             char report_json[128] = { '\0' };
-            report_to_string(report_json, report, session_id, mac_address);
+            report_to_string(report_json, report, session_id);
             Serial.println(report_json);
 
             if (!logger_report(report_json, report.time))
@@ -243,8 +270,6 @@ bool logger_connect()
  */
 bool logger_subscribe()
 {
-    if (WiFi.status() != WL_CONNECTED) return false;
-
     char inbound_topic[64] = { '\0' };
     sprintf(inbound_topic, "nodes/%s/inbound/#", mac_address);
     uint16_t result = logger.subscribe(inbound_topic, 0);
@@ -263,11 +288,13 @@ bool logger_subscribe()
     {
         if (checks++ >= LOGGER_SUBSCRIBE_TIMEOUT)
         {
+            subscribe_req_id = -1;
             awaiting_subscribe = false;
             return false;
         } else delay(1000);
     }
 
+    subscribe_req_id = -1;
     return true;
 }
 
@@ -276,8 +303,6 @@ bool logger_subscribe()
  */
 bool logger_session()
 {
-    if (WiFi.status() != WL_CONNECTED) return false;
-
     char outbound_topic[64] = { '\0' };
     sprintf(session_req_id, "%lu", rtc.GetDateTime() + 946684800UL);
     sprintf(outbound_topic, "nodes/%s/outbound/%s", mac_address,
@@ -286,9 +311,13 @@ bool logger_session()
     uint16_t result = logger.publish(outbound_topic, 1, false, "get_session");
 
     // Check if successfully sent session request
-    if (result)
-        awaiting_session = true;
-    else return false;
+    if (!result)
+    {
+        for (int i = 0; i < 11; i++)
+            session_req_id[i] = '\0';
+        return false;
+    }
+    else awaiting_session = true;
     delay(1000);
 
     // Check result status and timeout after set time
@@ -297,11 +326,15 @@ bool logger_session()
     {
         if (checks++ >= LOGGER_SESSION_TIMEOUT)
         {
+            for (int i = 0; i < 11; i++)
+                session_req_id[i] = '\0';
             awaiting_session = false;
             return false;
         } else delay(1000);
     }
 
+    for (int i = 0; i < 11; i++)
+        session_req_id[i] = '\0';
     return true;
 }
 
@@ -310,7 +343,7 @@ bool logger_session()
  */
 bool logger_report(const char* report, uint32_t time)
 {
-    if (WiFi.status() != WL_CONNECTED) return false;
+    report_req_result = ReportResult::None;
 
     char reports_topic[64] = { '\0' };
     sprintf(report_req_id, "%lu", time + 946684800UL);
@@ -320,9 +353,14 @@ bool logger_report(const char* report, uint32_t time)
     uint16_t result = logger.publish(reports_topic, 0, false, report);
 
     // Check if successfully sent report
-    if (result)
-        awaiting_report = true;
-    else return false;
+    if (!result)
+    {
+        for (int i = 0; i < 11; i++)
+            report_req_id[i] = '\0';
+        report_req_result = ReportResult::None;
+        return false;
+    }
+    else awaiting_report = true;
     delay(1000);
 
     // Check result status and timeout after set time
@@ -331,11 +369,16 @@ bool logger_report(const char* report, uint32_t time)
     {
         if (checks++ >= LOGGER_REPORT_TIMEOUT)
         {
+            for (int i = 0; i < 11; i++)
+                report_req_id[i] = '\0';
+            report_req_result = ReportResult::None;
             awaiting_report = false;
             return false;
         } else delay(1000);
     }
 
+    for (int i = 0; i < 11; i++)
+        report_req_id[i] = '\0';
     return true;
 }
 
@@ -409,7 +452,7 @@ void logger_on_message(char* topic, char* payload,
 
 
 /*
-    Checks if RTC time needs updating and does so via NTP (blocking)
+    Checks if RTC time needs updating and attempts to do so via NTP (blocking)
  */
 bool update_rtc_time()
 {
@@ -417,17 +460,11 @@ bool update_rtc_time()
     if (rtc.LastError() != 0) return false;
     if (is_rtc_valid) return true;
 
-    if (WiFi.status() != WL_CONNECTED) return false;
-
     WiFiUDP udp;
     NTPClient ntp(udp);
     ntp.begin();
 
-    while (!ntp.forceUpdate())
-    {
-        if (WiFi.status() != WL_CONNECTED)
-            return false;
-    }
+    if (!ntp.forceUpdate()) return false;
 
     // Subtract 30 years since RTC library uses 2000 epoch but NTP returns time
     // relative to 1970 epoch
