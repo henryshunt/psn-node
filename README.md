@@ -10,3 +10,4 @@ Contains the code to run on individual sensing nodes
 - AsyncMQTTClient
 - Adafruit Unified Sensor
 - Adafruit BME680
+- Adafruit TSL2591

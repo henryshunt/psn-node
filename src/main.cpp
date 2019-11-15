@@ -8,6 +8,7 @@
 #include "AsyncMqttClient.h"
 #include "Adafruit_Sensor.h"
 #include "Adafruit_BME680.h"
+#include "Adafruit_TSL2591.h"
 #include "ArduinoJson.h"
 
 #include "main.h"
@@ -181,7 +182,7 @@ void wake_routine()
  */
 void generate_report(const RtcDateTime& time)
 {
-    report_t report = { time, -99, -99, -99, -99, -99 };
+    report_t report = { time, -99, -99, -99, -99 };
 
     // Sample airt and relh
     Adafruit_BME680 bme680;
@@ -197,9 +198,16 @@ void generate_report(const RtcDateTime& time)
         }
     }
 
-    // Sample lvis and lifr
-    // report.lvis = ...
-    // report.lifr = ...
+    // Sample lvis
+    Adafruit_TSL2591 tsl2591;
+    if (tsl2591.begin())
+    {
+        sensors_event_t event;
+        tsl2591.getEvent(&event);
+        
+        if (event.light)
+            report.lght = event.light;
+    }
 
     // Sample batv
     // report.batv = ...

@@ -44,8 +44,7 @@ public:
         elements[front].time = report.time;
         elements[front].airt = report.airt;
         elements[front].relh = report.relh;
-        elements[front].lvis = report.lvis;
-        elements[front].lifr = report.lifr;
+        elements[front].lght = report.lght;
         elements[front].batv = report.batv;
         front = (front + 1) % MAX_SIZE;
 
@@ -62,8 +61,7 @@ public:
         elements[rear].time = report.time;
         elements[rear].airt = report.airt;
         elements[rear].relh = report.relh;
-        elements[rear].lvis = report.lvis;
-        elements[rear].lifr = report.lifr;
+        elements[rear].lght = report.lght;
         elements[rear].batv = report.batv;
 
         rear = (rear - 1) % MAX_SIZE;

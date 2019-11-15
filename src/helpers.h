@@ -12,8 +12,7 @@ struct report_t
     uint32_t time;
     float airt;
     float relh;
-    int lvis;
-    int lifr;
+    float lght;
     float batv;
 };
 

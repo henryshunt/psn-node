@@ -34,13 +34,9 @@ void report_to_string(char* report_out, const report_t& report, int session)
         length += sprintf(report_out + length, ", \"relh\": %.1f", report.relh);
     else strcat(report_out + length, ", \"relh\": null");
 
-    if (report.lvis != -99)
-        length += sprintf(report_out + length, ", \"lvis\": %d", report.lvis);
-    else strcat(report_out + length, ", \"lvis\": null");
-
-    if (report.lifr != -99)
-        length += sprintf(report_out + length, ", \"lifr\": %d", report.lifr);
-    else strcat(report_out + length, ", \"lifr\": null");
+    if (report.lght != -99)
+        length += sprintf(report_out + length, ", \"lght\": %.1f", report.lght);
+    else strcat(report_out + length, ", \"lght\": null");
 
     if (report.batv != -99)
         length += sprintf(report_out + length, ", \"batv\": %.2f", report.batv);
