@@ -1,6 +1,7 @@
+#include <WiFi.h>
+#include <esp_wpa2.h>
 #include <Wire.h>
 #include <WiFiUdp.h>
-#include <WiFi.h>
 
 #include "RtcDS3231.h"
 #include "NTPClient.h"
@@ -16,11 +17,12 @@
 
 // User configurable
 const char* NETWORK_ID = "***REMOVED***";
+const bool NETWORK_ENTERPRISE = false;
 const char* NETWORK_USERNAME = "";
 const char* NETWORK_PASSWORD = "***REMOVED***";
+#define NETWORK_CONNECT_TIMEOUT 10
 const char* LOGGER_ADDRESS = "192.168.0.61";
 const int LOGGER_PORT = 1883;
-#define NETWORK_CONNECT_TIMEOUT 10
 #define LOGGER_CONNECT_TIMEOUT 10
 #define LOGGER_SUBSCRIBE_TIMEOUT 8
 #define LOGGER_SESSION_TIMEOUT 8
@@ -184,6 +186,18 @@ void generate_report(const RtcDateTime& time)
  */
 bool network_connect()
 {
+    // Configure for enterprise wifi network if required
+    if (NETWORK_ENTERPRISE)
+    {
+        WiFi.mode(WIFI_STA);
+        esp_wifi_sta_wpa2_ent_set_username(
+            (uint8_t *)NETWORK_USERNAME, strlen(NETWORK_USERNAME));
+        esp_wifi_sta_wpa2_ent_set_password(
+            (uint8_t *)NETWORK_PASSWORD, strlen(NETWORK_PASSWORD));
+        esp_wpa2_config_t config = WPA2_CONFIG_INIT_DEFAULT();
+        esp_wifi_sta_wpa2_ent_enable(&config);
+    }
+
     WiFi.begin(NETWORK_ID, NETWORK_PASSWORD);
     delay(1000);
 
