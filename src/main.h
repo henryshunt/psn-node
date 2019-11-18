@@ -3,6 +3,7 @@
 void setup();
 void loop();
 
+void serial_routine();
 void wake_routine();
 void generate_report(const RtcDateTime&);
 
@@ -17,4 +18,5 @@ void logger_on_subscribe(uint16_t, uint8_t);
 void logger_on_message(char*, char*, AsyncMqttClientMessageProperties, size_t,
     size_t, size_t);
 
+bool load_configuration();
 bool update_rtc_time();

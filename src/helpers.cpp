@@ -28,19 +28,19 @@ void report_to_string(char* report_out, const report_t& report, int session)
 
     if (report.airt != -99)
         length += sprintf(report_out + length, ", \"airt\": %.1f", report.airt);
-    else strcat(report_out + length, ", \"airt\": null");
+    else length += sprintf(report_out + length, ", \"airt\": null");
 
     if (report.relh != -99)
         length += sprintf(report_out + length, ", \"relh\": %.1f", report.relh);
-    else strcat(report_out + length, ", \"relh\": null");
+    else length += sprintf(report_out + length, ", \"relh\": null");
 
     if (report.lght != -99)
         length += sprintf(report_out + length, ", \"lght\": %.1f", report.lght);
-    else strcat(report_out + length, ", \"lght\": null");
+    else length += sprintf(report_out + length, ", \"lght\": null");
 
     if (report.batv != -99)
         length += sprintf(report_out + length, ", \"batv\": %.2f", report.batv);
-    else strcat(report_out + length, ", \"batv\": null");
+    else length += sprintf(report_out + length, ", \"batv\": null");
 
     strcat(report_out + length, " }");
 }

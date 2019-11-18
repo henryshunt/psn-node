@@ -1,3 +1,5 @@
+#include <nvs_flash.h>
+#include <Preferences.h>
 #include <WiFi.h>
 #include <esp_wpa2.h>
 #include <Wire.h>
@@ -16,21 +18,22 @@
 #include "buffer.h"
 
 
-// User configurable
-const char* NETWORK_ID = "***REMOVED***";
-const bool NETWORK_ENTERPRISE = false;
-const char* NETWORK_USERNAME = "";
-const char* NETWORK_PASSWORD = "***REMOVED***";
-#define NETWORK_CONNECT_TIMEOUT 10
-const char* LOGGER_ADDRESS = "192.168.0.61";
-const int LOGGER_PORT = 1883;
-#define LOGGER_CONNECT_TIMEOUT 10
-#define LOGGER_SUBSCRIBE_TIMEOUT 8
-#define LOGGER_SESSION_TIMEOUT 8
-#define LOGGER_REPORT_TIMEOUT 8
+// Public configuration
+RTC_DATA_ATTR bool NETWORK_ENTERPRISE = false;
+RTC_DATA_ATTR char NETWORK_NAME[32] = { '\0' };
+RTC_DATA_ATTR char NETWORK_USERNAME[64] = { '\0' };
+RTC_DATA_ATTR char NETWORK_PASSWORD[64] = { '\0' };
+RTC_DATA_ATTR char LOGGER_ADDRESS[32] = { '\0' };
+RTC_DATA_ATTR uint16_t LOGGER_PORT = 1883;
+RTC_DATA_ATTR uint8_t NETWORK_CONNECT_TIMEOUT = 10;
+RTC_DATA_ATTR uint8_t LOGGER_CONNECT_TIMEOUT = 10;
+RTC_DATA_ATTR uint8_t LOGGER_SUBSCRIBE_TIMEOUT = 8;
+RTC_DATA_ATTR uint8_t LOGGER_SESSION_TIMEOUT = 8;
+RTC_DATA_ATTR uint8_t LOGGER_REPORT_TIMEOUT = 8;
 
-// Not user configurable
+// Private configuration
 const gpio_num_t RTC_SQW_PIN = GPIO_NUM_35;
+#define SERIAL_CONNECT_TIMEOUT 10
 #define PRE_ALARM_SLEEP_TIME 5
 #define BUFFER_MAX 10
 
@@ -41,12 +44,10 @@ bool awaiting_session = false;
 char session_req_id[11] = { '\0' };
 bool awaiting_report = false;
 char report_req_id[11] = { '\0' };
-ReportResult
-    report_req_result = ReportResult::None;
+ReportResult report_req_result = ReportResult::None;
 
 // Stored in sleep memory
-RTC_DATA_ATTR bool was_sleeping = false;
-RTC_DATA_ATTR char mac_address[18] = { '\0' };
+RTC_DATA_ATTR bool cold_booted = true;
 RTC_DATA_ATTR int session_id = -1;
 RTC_DATA_ATTR int session_interval = -1;
 RTC_DATA_ATTR int session_batch_size = -1;
@@ -54,8 +55,11 @@ RTC_DATA_ATTR report_buffer_t buffer;
 RTC_DATA_ATTR report_t reports[BUFFER_MAX];
 
 // Services
+Preferences config;
 RtcDS3231<TwoWire> rtc(Wire);
 AsyncMqttClient logger;
+
+RTC_DATA_ATTR char mac_address[18] = { '\0' };
 
 
 void setup()
@@ -63,7 +67,7 @@ void setup()
     Serial.begin(9600);
     rtc.Begin();
 
-    if (!was_sleeping)
+    if (cold_booted)
     {
         // Get MAC address for unique identification of the node
         uint8_t mac_out[6];
@@ -71,6 +75,31 @@ void setup()
 
         sprintf(mac_address, "%x:%x:%x:%x:%x:%x", mac_out[0], mac_out[1],
             mac_out[2], mac_out[3], mac_out[4], mac_out[5]);
+
+        // Load device configuration from non-volatile storage
+        if (!config.begin("psn", false)) esp_restart();
+        
+        bool config_result = load_configuration();
+
+        // Enter serial mode if data received within a set time after boot
+        bool serial_mode = true;
+        delay(1000);
+
+        int checks = 1;
+        while (!Serial.available())
+        {
+            if (checks++ >= SERIAL_CONNECT_TIMEOUT)
+            {
+                serial_mode = false;
+                break;
+            }
+            else delay(1000);
+        }
+
+        if (serial_mode) serial_routine();
+
+        // Configuration is invalid so we can't proceed
+        if (!config_result) esp_deep_sleep_start();
 
         // Connect to network and logging server and reboot on failure
         // NOTE: I cannot fully guarantee these functions will work properly
@@ -117,14 +146,14 @@ void setup()
         first_alarm += (60 - first_alarm.Second());
         first_alarm = round_up(first_alarm, session_interval * 60);
 
-        // Leave at least 5 seconds between sleep and wake
+        // Leave some time between sleep and wake
         if (first_alarm - rtc.GetDateTime() <= PRE_ALARM_SLEEP_TIME)
             first_alarm += session_interval * 60;
 
-        // Set alarm for first report and go to sleep
+        // Set alarm for first report and go into deep sleep
         set_alarm(rtc, first_alarm);
         esp_sleep_enable_ext0_wakeup(RTC_SQW_PIN, 0);
-        was_sleeping = true;
+        cold_booted = false;
         esp_deep_sleep_start();
     }
     else wake_routine();
@@ -132,6 +161,116 @@ void setup()
 
 void loop() { }
 
+
+/*
+    Sits in a continuous loop and responds to commands sent over serial
+ */
+void serial_routine()
+{
+    while (true)
+    {
+        char command[200] = { '\0' };
+        int position = 0;
+        bool line_ended = false;
+
+        // Store received characters until we receive a new line character
+        while (!line_ended)
+        {
+            while (Serial.available())
+            {
+                char read_char = Serial.read();
+                if (read_char != '\n')
+                    command[position++] = read_char;
+                else line_ended = true;
+            }
+        }
+        
+        // Respond to the received command
+        if (strncmp(command, "psna_sc", 7) == 0)
+            Serial.write("psna_scr\n");
+        
+        else if (strncmp(command, "psna_rc", 7) == 0)
+        {
+            char config[200] = { '\0' };
+            int length = 0;
+    
+            length += sprintf(config, "psna_rcr { \"id\": \"");
+            length += sprintf(config + length, mac_address);
+            length += sprintf(
+                config + length, "\", \"nent\": %d", NETWORK_ENTERPRISE);
+
+            if (NETWORK_NAME[0] != '\0')
+            {
+                length += sprintf(
+                    config + length, ", \"nnam\": \"%s\"", NETWORK_NAME);
+            } else length += sprintf(config + length, ", \"nnam\": null");
+
+            if (NETWORK_USERNAME[0] != '\0')
+            {
+                length += sprintf(
+                    config + length, ", \"nunm\": \"%s\"", NETWORK_USERNAME);
+            } else length += sprintf(config + length, ", \"nunm\": null");
+
+            if (NETWORK_PASSWORD[0] != '\0')
+            {
+                length += sprintf(
+                    config + length, ", \"npwd\": \"%s\"", NETWORK_PASSWORD);
+            } else length += sprintf(config + length, ", \"npwd\": null");
+
+            if (LOGGER_ADDRESS[0] != '\0')
+            {
+                length += sprintf(
+                    config + length, ", \"ladr\": \"%s\"", LOGGER_ADDRESS);
+            } else length += sprintf(config + length, ", \"ladr\": null");
+
+            length += sprintf(config + length, ", \"lprt\": %u", LOGGER_PORT);
+            length += sprintf(
+                config + length, ", \"tncn\": %u", NETWORK_CONNECT_TIMEOUT);
+            length += sprintf(
+                config + length, ", \"tlcn\": %u", LOGGER_CONNECT_TIMEOUT);
+            length += sprintf(
+                config + length, ", \"tlsb\": %u", LOGGER_SUBSCRIBE_TIMEOUT);
+            length += sprintf(
+                config + length, ", \"tlss\": %u", LOGGER_SESSION_TIMEOUT);
+            length += sprintf(
+                config + length, ", \"tlrp\": %u", LOGGER_REPORT_TIMEOUT);
+            strcat(config + length, " }\n");
+            
+            Serial.write(config);
+        }
+
+        else if (strncmp(command, "psna_wc {", 9) == 0)
+        {
+            StaticJsonDocument<300> document;
+            DeserializationError deser = deserializeJson(document, command + 8);
+            
+            if (deser == DeserializationError::Ok)
+            {
+                if (!config.begin("psn", false))
+                {
+                    Serial.write("psna_wcf\n");
+                    return;
+                }
+
+                config.putBool("nent", document["nent"]);
+                config.putString("nnam", (const char*)document["nnam"]);
+                config.putString("nunm", (const char*)document["nunm"]);
+                config.putString("npwd", (const char*)document["npwd"]);
+                config.putString("ladr", (const char*)document["ladr"]);
+                config.putUShort("lprt", document["lprt"]);
+                config.putUChar("tncn", document["tncn"]);
+                config.putUChar("tlcn", document["tlcn"]);
+                config.putUChar("tlsb", document["tlsb"]);
+                config.putUChar("tlss", document["tlss"]);
+                config.putUChar("tlrp", document["tlrp"]);
+                config.end();
+                
+                Serial.write("psna_wcs\n");
+            }
+            else Serial.write("psna_wcf\n");
+        }
+    }
+}
 
 /*
     Generates a report, sets next alarm, transmits reports, goes to sleep
@@ -171,7 +310,7 @@ void wake_routine()
         }
     }
 
-    // Set alarm for next report and go to sleep
+    // Set alarm for next report and go into deep sleep
     set_alarm(rtc, next_alarm);
     esp_sleep_enable_ext0_wakeup(RTC_SQW_PIN, 0);
     esp_deep_sleep_start();
@@ -233,7 +372,7 @@ bool network_connect()
         esp_wifi_sta_wpa2_ent_enable(&config);
     }
 
-    WiFi.begin(NETWORK_ID, NETWORK_PASSWORD);
+    WiFi.begin(NETWORK_NAME, NETWORK_PASSWORD);
     delay(1000);
 
     // Check connection status and timeout after set time
@@ -458,6 +597,31 @@ void logger_on_message(char* topic, char* payload,
     }
 }
 
+
+/*
+    Loads configuration from NVS into global variables and checks if valid
+ */
+bool load_configuration()
+{
+    NETWORK_ENTERPRISE = config.getBool("nent", false);
+    strcpy(NETWORK_NAME, config.getString("nnam", String()).c_str());
+    strcpy(NETWORK_USERNAME, config.getString("nunm", String()).c_str());
+    strcpy(NETWORK_PASSWORD, config.getString("npwd", String()).c_str());
+    strcpy(LOGGER_ADDRESS, config.getString("ladr", String()).c_str());
+    LOGGER_PORT = config.getUShort("lprt", 1883);
+    NETWORK_CONNECT_TIMEOUT = config.getUChar("tncn", 10);
+    LOGGER_CONNECT_TIMEOUT = config.getUChar("tlcn", 10);
+    LOGGER_SUBSCRIBE_TIMEOUT = config.getUChar("tlsb", 8);
+    LOGGER_SESSION_TIMEOUT = config.getUChar("tlss", 8);
+    LOGGER_REPORT_TIMEOUT = config.getUChar("tlrp", 8);
+    config.end();
+
+    if (strlen(NETWORK_NAME) == 0 || strlen(NETWORK_PASSWORD) == 0 ||
+            (NETWORK_ENTERPRISE && strlen(NETWORK_USERNAME) == 0) ||
+            strlen(LOGGER_ADDRESS) == 0)        
+        return false;
+    else return true;
+}
 
 /*
     Checks if RTC time needs updating and attempts to do so via NTP (blocking)
