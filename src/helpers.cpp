@@ -27,15 +27,15 @@ void report_to_string(char* report_out, const report_t& report, int session)
     length += sprintf(report_out, "{ \"session\": %d", session);
 
     if (report.airt != -99)
-        length += sprintf(report_out + length, ", \"airt\": %.1f", report.airt);
+        length += sprintf(report_out + length, ", \"airt\": %.2f", report.airt);
     else length += sprintf(report_out + length, ", \"airt\": null");
 
     if (report.relh != -99)
-        length += sprintf(report_out + length, ", \"relh\": %.1f", report.relh);
+        length += sprintf(report_out + length, ", \"relh\": %.2f", report.relh);
     else length += sprintf(report_out + length, ", \"relh\": null");
 
     if (report.lght != -99)
-        length += sprintf(report_out + length, ", \"lght\": %.1f", report.lght);
+        length += sprintf(report_out + length, ", \"lght\": %ld", report.lght);
     else length += sprintf(report_out + length, ", \"lght\": null");
 
     if (report.batv != -99)
