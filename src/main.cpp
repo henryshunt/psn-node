@@ -323,7 +323,7 @@ void generate_report(const RtcDateTime& time)
 {
     report_t report = { time, -99, -99, -99, -99 };
 
-    // Sample airt and relh
+    // Sample temperature and humidity
     Adafruit_BME680 bme680;
     if (bme680.begin(0x76))
     {
@@ -337,18 +337,19 @@ void generate_report(const RtcDateTime& time)
         }
     }
 
-    // Sample lvis
+    // Sample light level
     Adafruit_TSL2591 tsl2591;
     if (tsl2591.begin())
     {
+        tsl2591.setTiming(TSL2591_INTEGRATIONTIME_200MS);
+        tsl2591.setGain(TSL2591_GAIN_MED);
+
         sensors_event_t event;
-        tsl2591.getEvent(&event);
-        
-        if (event.light)
+        if (tsl2591.getEvent(&event) && event.light > 0)
             report.lght = event.light;
     }
 
-    // Sample batv
+    // Sample battery voltage
     // report.batv = ...
 
     buffer.push_front(reports, report);
