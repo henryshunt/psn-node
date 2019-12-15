@@ -32,7 +32,7 @@ RTC_DATA_ATTR uint8_t LOGGER_SESSION_TIMEOUT = 8;
 RTC_DATA_ATTR uint8_t LOGGER_REPORT_TIMEOUT = 8;
 
 // Private configuration
-const gpio_num_t RTC_SQW_PIN = GPIO_NUM_35;
+#define RTC_SQW_PIN GPIO_NUM_35
 #define SERIAL_CONNECT_TIMEOUT 10
 #define PRE_ALARM_SLEEP_TIME 5
 #define BUFFER_MAX 10
@@ -46,8 +46,9 @@ bool awaiting_report = false;
 char report_req_id[11] = { '\0' };
 ReportResult report_req_result = ReportResult::None;
 
-// Stored in sleep memory
+// Persisted between deep sleeps
 RTC_DATA_ATTR bool cold_booted = true;
+RTC_DATA_ATTR char mac_address[18] = { '\0' };
 RTC_DATA_ATTR int session_id = -1;
 RTC_DATA_ATTR int session_interval = -1;
 RTC_DATA_ATTR int session_batch_size = -1;
@@ -58,8 +59,6 @@ RTC_DATA_ATTR report_t reports[BUFFER_MAX];
 Preferences config;
 RtcDS3231<TwoWire> rtc(Wire);
 AsyncMqttClient logger;
-
-RTC_DATA_ATTR char mac_address[18] = { '\0' };
 
 
 void setup()
@@ -185,16 +184,17 @@ void serial_routine()
             }
         }
         
-        // Respond to the received command
-        if (strncmp(command, "psna_sc", 7) == 0)
-            Serial.write("psna_scr\n");
+        // Respond to ping command command
+        if (strncmp(command, "psna_pn", 7) == 0)
+            Serial.write("psna_pnr\n");
         
+        // Respond to read configuration command
         else if (strncmp(command, "psna_rc", 7) == 0)
         {
             char config[200] = { '\0' };
             int length = 0;
     
-            length += sprintf(config, "psna_rcr { \"id\": \"");
+            length += sprintf(config, "psna_rcr { \"madr\": \"");
             length += sprintf(config + length, mac_address);
             length += sprintf(
                 config + length, "\", \"nent\": %d", NETWORK_ENTERPRISE);
@@ -239,6 +239,7 @@ void serial_routine()
             Serial.write(config);
         }
 
+        // Respond to write configuration command
         else if (strncmp(command, "psna_wc {", 9) == 0)
         {
             StaticJsonDocument<300> document;
