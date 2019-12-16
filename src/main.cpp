@@ -253,19 +253,51 @@ void serial_routine()
                     return;
                 }
 
-                config.putBool("nent", document["nent"]);
-                config.putString("nnam", (const char*)document["nnam"]);
-                config.putString("nunm", (const char*)document["nunm"]);
-                config.putString("npwd", (const char*)document["npwd"]);
-                config.putString("ladr", (const char*)document["ladr"]);
-                config.putUShort("lprt", document["lprt"]);
-                config.putUChar("tncn", document["tncn"]);
-                config.putUChar("tlcn", document["tlcn"]);
-                config.putUChar("tlsb", document["tlsb"]);
-                config.putUChar("tlss", document["tlss"]);
-                config.putUChar("tlrp", document["tlrp"]);
+                if (document.containsKey("nent"))
+                    config.putBool("nent", document["nent"]);
+                else Serial.write("psna_wcf\n");
+
+                if (document.containsKey("nnam"))
+                    config.putString("nnam", (const char*)document["nnam"]);
+                else Serial.write("psna_wcf\n");
+
+                if (document.containsKey("nunm"))
+                    config.putString("nunm", (const char*)document["nunm"]);
+                else Serial.write("psna_wcf\n");
+
+                if (document.containsKey("npwd"))
+                    config.putString("npwd", (const char*)document["npwd"]);
+                else Serial.write("psna_wcf\n");
+
+                if (document.containsKey("ladr"))
+                    config.putString("ladr", (const char*)document["ladr"]);
+                else Serial.write("psna_wcf\n");
+
+                if (document.containsKey("lprt"))
+                    config.putUShort("lprt", document["lprt"]);
+                else Serial.write("psna_wcf\n");
+
+                if (document.containsKey("tncn"))
+                    config.putUChar("tncn", document["tncn"]);
+                else Serial.write("psna_wcf\n");
+
+                if (document.containsKey("tlcn"))
+                    config.putUChar("tlcn", document["tlcn"]);
+                else Serial.write("psna_wcf\n");
+
+                if (document.containsKey("tlsb"))
+                    config.putUChar("tlsb", document["tlsb"]);
+                else Serial.write("psna_wcf\n");
+
+                if (document.containsKey("tlss"))
+                    config.putUChar("tlss", document["tlss"]);
+                else Serial.write("psna_wcf\n");
+
+                if (document.containsKey("tlrp"))
+                    config.putUChar("tlrp", document["tlrp"]);
+                else Serial.write("psna_wcf\n");
+
                 config.end();
-                
                 Serial.write("psna_wcs\n");
             }
             else Serial.write("psna_wcf\n");
