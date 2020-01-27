@@ -29,18 +29,17 @@ RTC_DATA_ATTR uint8_t LOGGER_TIMEOUT;
 
 // Private configuration
 #define SERIAL_TIMEOUT 5
-#define MAX_BUFFER_SIZE 10
+#define BUFFER_MAX 10
 #define ALARM_SET_THRESHOLD 5
 #define RTC_SQUARE_WAVE_PIN GPIO_NUM_35
 
 // Network related
 bool awaiting_subscribe = false;
-uint16_t subscribe_req_id = -1;
+uint16_t subscribe_id = -1;
 bool awaiting_session = false;
-char session_req_id[11] = { '\0' };
 bool awaiting_report = false;
-char report_req_id[11] = { '\0' };
-ReportResult report_req_result = ReportResult::None;
+ReportResult report_result = ReportResult::None;
+uint16_t publish_id = -1;
 
 // Persisted between deep sleeps
 RTC_DATA_ATTR bool cold_boot = true;
@@ -49,7 +48,7 @@ RTC_DATA_ATTR int session_id = -1;
 RTC_DATA_ATTR int session_interval = -1;
 RTC_DATA_ATTR int session_batch_size = -1;
 RTC_DATA_ATTR report_buffer_t buffer;
-RTC_DATA_ATTR report_t reports[MAX_BUFFER_SIZE];
+RTC_DATA_ATTR report_t reports[BUFFER_MAX];
 
 // Services
 Preferences config;
@@ -72,8 +71,7 @@ void setup()
             mac_out[2], mac_out[3], mac_out[4], mac_out[5]);
 
         // Load device configuration from non-volatile storage
-        if (!config.begin("psn", false))
-            esp_deep_sleep_start();
+        if (!config.begin("psn", false)) esp_deep_sleep_start();
             
         bool config_result = load_configuration();
 
@@ -89,35 +87,29 @@ void setup()
             {
                 serial_mode = false;
                 break;
-            }
-            else delay(1000);
+            } else delay(1000);
         }
 
-        if (serial_mode)
-            serial_routine();
+        if (serial_mode) serial_routine();
 
 
         // Check configuration is valid
-        if (!config_result)
-            esp_deep_sleep_start();
+        if (!config_result) esp_deep_sleep_start();
 
         // Check RTC time is valid (may not be set or may have lost power)
         bool rtc_valid = rtc.IsDateTimeValid();
-
         if (!rtc.LastError())
         {
             if (!rtc_valid)
                 esp_deep_sleep_start();
-        }
-        else esp_deep_sleep_start();
+        } else esp_deep_sleep_start();
 
 
         // Connect to network and logging server and reboot on failure
         // NOTE: I cannot fully guarantee these functions will work properly
         // when called multiple times. The only way to ensure the system is not
         // left in an unrecoverable state is to perform a full restart.
-        if (!network_connect() || !logger_connect())
-            esp_restart();
+        if (!network_connect() || !logger_connect()) esp_restart();
 
         // Subscribe to inbound topic on logging server
         while (true)
@@ -140,11 +132,10 @@ void setup()
         }
 
         // No active session for this node
-        if (session_id == -1)
-            esp_deep_sleep_start();
+        if (session_id == -1) esp_deep_sleep_start();
 
 
-        buffer.maximum_size = MAX_BUFFER_SIZE;
+        buffer.maximum_size = BUFFER_MAX;
         rtc.SetSquareWavePin(DS3231SquareWavePin_ModeAlarmOne);
 
         RtcDateTime first_alarm = rtc.GetDateTime();
@@ -301,8 +292,7 @@ void serial_routine()
 void wake_routine()
 {
     // Check if RTC time is valid (may have lost power)
-    if (!rtc_time_valid(rtc))
-        esp_deep_sleep_start();
+    if (!rtc_time_valid(rtc)) esp_deep_sleep_start();
     
     // Set alarm for next report
     RtcDateTime now = rtc.GetDateTime();
@@ -333,7 +323,7 @@ void wake_routine()
             else
             {
                 // Session has ended so go to sleep permanently
-                if (report_req_result == ReportResult::NoSession)
+                if (report_result == ReportResult::NoSession)
                     esp_deep_sleep_start();
             }
         }
@@ -448,12 +438,13 @@ bool logger_subscribe()
 {
     char inbound_topic[64] = { '\0' };
     sprintf(inbound_topic, "nodes/%s/inbound/#", mac_address);
+
     uint16_t result = logger.subscribe(inbound_topic, 0);
 
-    // Check if successfully sent subscribe request
+    // Check if successfully sent message
     if (result)
     {
-        subscribe_req_id = result;
+        subscribe_id = result;
         awaiting_subscribe = true;
     } else return false;
     delay(1000);
@@ -464,13 +455,11 @@ bool logger_subscribe()
     {
         if (checks++ >= LOGGER_TIMEOUT)
         {
-            subscribe_req_id = -1;
             awaiting_subscribe = false;
             return false;
         } else delay(1000);
     }
 
-    subscribe_req_id = -1;
     return true;
 }
 
@@ -480,20 +469,14 @@ bool logger_subscribe()
 bool logger_session()
 {
     char outbound_topic[64] = { '\0' };
-    sprintf(session_req_id, "%lu", rtc.GetDateTime() + 946684800UL);
-    sprintf(outbound_topic, "nodes/%s/outbound/%s", mac_address,
-        session_req_id);
+    sprintf(outbound_topic, "nodes/%s/outbound/%u", mac_address, ++publish_id);
 
     uint16_t result = logger.publish(outbound_topic, 1, false, "get_session");
 
-    // Check if successfully sent session request
-    if (!result)
-    {
-        for (int i = 0; i < 11; i++)
-            session_req_id[i] = '\0';
-        return false;
-    }
-    else awaiting_session = true;
+    // Check if successfully sent message
+    if (result)
+        awaiting_session = true;
+    else return false;
     delay(1000);
 
     // Check result status and timeout after set time
@@ -502,15 +485,11 @@ bool logger_session()
     {
         if (checks++ >= LOGGER_TIMEOUT)
         {
-            for (int i = 0; i < 11; i++)
-                session_req_id[i] = '\0';
             awaiting_session = false;
             return false;
         } else delay(1000);
     }
 
-    for (int i = 0; i < 11; i++)
-        session_req_id[i] = '\0';
     return true;
 }
 
@@ -519,24 +498,17 @@ bool logger_session()
  */
 bool logger_report(const char* report, uint32_t time)
 {
-    report_req_result = ReportResult::None;
-
     char reports_topic[64] = { '\0' };
-    sprintf(report_req_id, "%lu", time + 946684800UL);
-    sprintf(reports_topic, "nodes/%s/reports/%s", mac_address,
-        report_req_id);
+    sprintf(reports_topic, "nodes/%s/reports/%u", mac_address, ++publish_id);
 
     uint16_t result = logger.publish(reports_topic, 0, false, report);
 
-    // Check if successfully sent report
+    // Check if successfully sent message
     if (!result)
     {
-        for (int i = 0; i < 11; i++)
-            report_req_id[i] = '\0';
-        report_req_result = ReportResult::None;
+        report_result = ReportResult::None;
         return false;
-    }
-    else awaiting_report = true;
+    } else awaiting_report = true;
     delay(1000);
 
     // Check result status and timeout after set time
@@ -545,16 +517,12 @@ bool logger_report(const char* report, uint32_t time)
     {
         if (checks++ >= LOGGER_TIMEOUT)
         {
-            for (int i = 0; i < 11; i++)
-                report_req_id[i] = '\0';
-            report_req_result = ReportResult::None;
+            report_result = ReportResult::None;
             awaiting_report = false;
             return false;
         } else delay(1000);
     }
 
-    for (int i = 0; i < 11; i++)
-        report_req_id[i] = '\0';
     return true;
 }
 
@@ -564,7 +532,7 @@ bool logger_report(const char* report, uint32_t time)
  */
 void logger_on_subscribe(uint16_t packet_id, uint8_t qos)
 {
-    if (awaiting_subscribe && packet_id == subscribe_req_id)
+    if (awaiting_subscribe && packet_id == subscribe_id)
         awaiting_subscribe = false;
 }
 
@@ -575,53 +543,47 @@ void logger_on_message(char* topic, char* payload,
     AsyncMqttClientMessageProperties properties, size_t length, size_t index,
     size_t total)
 {
-    // Get the ID of the received message
-    char message_id[11] = { '\0' };
-    std::string topic_str = std::string(topic);
-    std::string topic_substring
-        = topic_str.substr(topic_str.find_last_of('/') + 1);
-    memcpy(message_id, topic_substring.c_str(), 10);
+    // Get ID of received message from the final topic element
+    uint32_t message_id = strtoul(
+        topic + std::string(topic).find_last_of('/') + 1, NULL, 10);
+
+    if (message_id != publish_id) return;
 
     // Copy message into memory to remove unwanted trailing characters
     char* message = (char*)calloc(length + 1, sizeof(char));
     memcpy(message, payload, length);
 
+
     // Process the received message
     if (awaiting_session)
     {
-        if (strcmp(message_id, session_req_id) == 0)
+        // If got a session then extract the session info
+        if (strcmp(message, "no_session") != 0)
         {
-            // If got a session then extract the session info
-            if (strcmp(message, "no_session") != 0)
+            StaticJsonDocument<300> document;
+            DeserializationError deser = deserializeJson(document, message);
+            
+            if (deser == DeserializationError::Ok)
             {
-                StaticJsonDocument<300> document;
-                DeserializationError deser = deserializeJson(document, message);
-                
-                if (deser == DeserializationError::Ok)
-                {
-                    session_id = document["session"];
-                    session_interval = document["interval"];
-                    session_batch_size = document["batch_size"];
-                    awaiting_session = false;
-                }
+                session_id = document["session"];
+                session_interval = document["interval"];
+                session_batch_size = document["batch_size"];
+                awaiting_session = false;
             }
-            else awaiting_session = false;
         }
+        else awaiting_session = false;
     }
     else if (awaiting_report)
     {
-        if (strcmp(message_id, report_req_id) == 0)
+        if (strcmp(message, "ok") == 0)
         {
-            if (strcmp(message, "ok") == 0)
-            {
-                report_req_result = ReportResult::Ok;
-                awaiting_report = false;
-            }
-            else if (strcmp(message, "no_session") == 0)
-            {
-                report_req_result = ReportResult::NoSession;
-                awaiting_report = false;
-            }
+            report_result = ReportResult::Ok;
+            awaiting_report = false;
+        }
+        else if (strcmp(message, "no_session") == 0)
+        {
+            report_result = ReportResult::NoSession;
+            awaiting_report = false;
         }
     }
 }
@@ -644,8 +606,8 @@ bool load_configuration()
 
     if (strlen(NETWORK_NAME) == 0 || strlen(NETWORK_PASSWORD) == 0 ||
             (NETWORK_ENTERPRISE && strlen(NETWORK_USERNAME) == 0) ||
-            strlen(LOGGER_ADDRESS) == 0 && NETWORK_TIMEOUT <= 13 &&
-            LOGGER_TIMEOUT <= 13)
+            strlen(LOGGER_ADDRESS) == 0 || NETWORK_TIMEOUT > 13 ||
+            LOGGER_TIMEOUT > 13)
         return false;
     else return true;
 }
