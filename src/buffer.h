@@ -21,11 +21,11 @@ private:
      */
     bool is_full()
     {
-        return (count == MAX_SIZE) ? true : false;
+        return (count == maximum_size) ? true : false;
     }
 
 public:
-    int MAX_SIZE = 1; // Should be const but has to be set externally
+    int maximum_size = 1; // Should be const but has to be set externally
     int count = 0;
 
     /*
@@ -46,10 +46,10 @@ public:
         elements[front].relh = report.relh;
         elements[front].lght = report.lght;
         elements[front].batv = report.batv;
-        front = (front + 1) % MAX_SIZE;
+        front = (front + 1) % maximum_size;
 
         if (is_full())
-            rear = (rear + 1) % MAX_SIZE;
+            rear = (rear + 1) % maximum_size;
         else count += 1;
     }
 
@@ -64,7 +64,7 @@ public:
         elements[rear].lght = report.lght;
         elements[rear].batv = report.batv;
 
-        rear = (rear - 1) % MAX_SIZE;
+        rear = (rear - 1) % maximum_size;
         count += 1;
     }
 
@@ -74,7 +74,7 @@ public:
     report_t pop_rear(report_t* elements)
     {
         report_t report = elements[rear];
-        rear = (rear + 1) % MAX_SIZE;
+        rear = (rear + 1) % maximum_size;
         count -=1;
         return report;
     }

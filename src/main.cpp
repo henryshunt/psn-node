@@ -6,7 +6,6 @@
 #include <WiFiUdp.h>
 
 #include "RtcDS3231.h"
-#include "NTPClient.h"
 #include "AsyncMqttClient.h"
 #include "Adafruit_Sensor.h"
 #include "Adafruit_BME680.h"
@@ -29,10 +28,10 @@ RTC_DATA_ATTR uint8_t NETWORK_TIMEOUT;
 RTC_DATA_ATTR uint8_t LOGGER_TIMEOUT;
 
 // Private configuration
-#define RTC_SQW_PIN GPIO_NUM_35
-#define SERIAL_CONNECT_TIMEOUT 10
-#define PRE_ALARM_SLEEP_TIME 5
-#define BUFFER_MAX 10
+#define SERIAL_TIMEOUT 5
+#define MAX_BUFFER_SIZE 10
+#define ALARM_SET_THRESHOLD 5
+#define RTC_SQUARE_WAVE_PIN GPIO_NUM_35
 
 // Network related
 bool awaiting_subscribe = false;
@@ -44,13 +43,13 @@ char report_req_id[11] = { '\0' };
 ReportResult report_req_result = ReportResult::None;
 
 // Persisted between deep sleeps
-RTC_DATA_ATTR bool cold_booted = true;
+RTC_DATA_ATTR bool cold_boot = true;
 RTC_DATA_ATTR char mac_address[18] = { '\0' };
 RTC_DATA_ATTR int session_id = -1;
 RTC_DATA_ATTR int session_interval = -1;
 RTC_DATA_ATTR int session_batch_size = -1;
 RTC_DATA_ATTR report_buffer_t buffer;
-RTC_DATA_ATTR report_t reports[BUFFER_MAX];
+RTC_DATA_ATTR report_t reports[MAX_BUFFER_SIZE];
 
 // Services
 Preferences config;
@@ -63,9 +62,9 @@ void setup()
     Serial.begin(9600);
     rtc.Begin();
 
-    if (cold_booted)
+    if (cold_boot)
     {
-        // Get MAC address for unique identification of the node
+        // Load device MAC address for unique node identification
         uint8_t mac_out[6];
         esp_efuse_mac_get_default(mac_out);
 
@@ -73,18 +72,20 @@ void setup()
             mac_out[2], mac_out[3], mac_out[4], mac_out[5]);
 
         // Load device configuration from non-volatile storage
-        if (!config.begin("psn", false)) esp_restart();
-        
+        if (!config.begin("psn", false))
+            esp_deep_sleep_start();
+            
         bool config_result = load_configuration();
 
-        // Enter serial mode if data received within a set time after boot
+
+        // Permanently enter serial mode if serial data received before timeout
         bool serial_mode = true;
         delay(1000);
 
         int checks = 1;
         while (!Serial.available())
         {
-            if (checks++ >= SERIAL_CONNECT_TIMEOUT)
+            if (checks++ >= SERIAL_TIMEOUT)
             {
                 serial_mode = false;
                 break;
@@ -92,27 +93,33 @@ void setup()
             else delay(1000);
         }
 
-        if (serial_mode) serial_routine();
+        if (serial_mode)
+            serial_routine();
 
-        // Configuration is invalid so we can't proceed
-        if (!config_result) esp_deep_sleep_start();
+
+        // Check configuration is valid
+        if (!config_result)
+            esp_deep_sleep_start();
+
+        // Check RTC time is valid (may not be set or may have lost power)
+        bool rtc_valid = rtc.IsDateTimeValid();
+
+        if (!rtc.LastError())
+        {
+            if (!rtc_valid)
+                esp_deep_sleep_start();
+        }
+        else esp_deep_sleep_start();
+
 
         // Connect to network and logging server and reboot on failure
         // NOTE: I cannot fully guarantee these functions will work properly
         // when called multiple times. The only way to ensure the system is not
         // left in an unrecoverable state is to perform a full restart.
-        if (!network_connect() || !logger_connect()) esp_restart();
+        if (!network_connect() || !logger_connect())
+            esp_restart();
 
-        // Update RTC time if required and restart device if disconnected
-        while (true)
-        {
-            if (!update_rtc_time())
-            {
-                if (WiFi.status() != WL_CONNECTED) esp_restart();
-            } else break;
-        }
-
-        // Subscribe to inbound topic and restart device if disconnected
+        // Subscribe to inbound topic on logging server
         while (true)
         {
             if (!logger_subscribe())
@@ -122,7 +129,7 @@ void setup()
             } else break;
         }
 
-        // Request session for this node and restart device if disconnected
+        // Request active session for this node
         while (true)
         {
             if (!logger_session())
@@ -132,24 +139,28 @@ void setup()
             } else break;
         }
 
-        // No session for this node so go to sleep permanently
-        if (session_id == -1) esp_deep_sleep_start();
+        // No active session for this node
+        if (session_id == -1)
+            esp_deep_sleep_start();
 
-        buffer.MAX_SIZE = BUFFER_MAX;
+
+        buffer.maximum_size = MAX_BUFFER_SIZE;
         rtc.SetSquareWavePin(DS3231SquareWavePin_ModeAlarmOne);
 
         RtcDateTime first_alarm = rtc.GetDateTime();
-        first_alarm += (60 - first_alarm.Second());
-        first_alarm = round_up(first_alarm, session_interval * 60);
+        first_alarm += (60 - first_alarm.Second()); // Start of next minute
+        first_alarm = round_up(first_alarm, session_interval * 60); // Round up
+        // to next multiple of the interval (so e.g. a 5 minute interval always
+        // triggers on minutes ending in 0 and 5)
 
-        // Leave some time between sleep and wake
-        if (first_alarm - rtc.GetDateTime() <= PRE_ALARM_SLEEP_TIME)
+        // Advance to next interval if too close to first available interval
+        if (first_alarm - rtc.GetDateTime() <= ALARM_SET_THRESHOLD)
             first_alarm += session_interval * 60;
 
-        // Set alarm for first report and go into deep sleep
+        // Set alarm for first report then go into deep sleep
         set_alarm(rtc, first_alarm);
-        esp_sleep_enable_ext0_wakeup(RTC_SQW_PIN, 0);
-        cold_booted = false;
+        esp_sleep_enable_ext0_wakeup(RTC_SQUARE_WAVE_PIN, 0);
+        cold_boot = false;
         esp_deep_sleep_start();
     }
     else wake_routine();
@@ -301,7 +312,7 @@ void wake_routine()
     {
         // Only transmit if there's enough time before next alarm
         while (!buffer.is_empty() && next_alarm - now >= LOGGER_TIMEOUT
-            + PRE_ALARM_SLEEP_TIME)
+            + ALARM_SET_THRESHOLD)
         {
             report_t report = buffer.pop_rear(reports);
             char report_json[128] = { '\0' };
@@ -322,9 +333,9 @@ void wake_routine()
         }
     }
 
-    // Set alarm for next report and go into deep sleep
+    // Set alarm for next report then go into deep sleep
     set_alarm(rtc, next_alarm);
-    esp_sleep_enable_ext0_wakeup(RTC_SQW_PIN, 0);
+    esp_sleep_enable_ext0_wakeup(RTC_SQUARE_WAVE_PIN, 0);
     esp_deep_sleep_start();
 }
 
@@ -612,7 +623,7 @@ void logger_on_message(char* topic, char* payload,
 
 
 /*
-    Loads configuration from NVS into global variables and checks if valid
+    Loads configuration from NVS into global variables and checks validity
  */
 bool load_configuration()
 {
@@ -631,25 +642,4 @@ bool load_configuration()
             strlen(LOGGER_ADDRESS) == 0)        
         return false;
     else return true;
-}
-
-/*
-    Checks if RTC time needs updating and attempts to do so via NTP (blocking)
- */
-bool update_rtc_time()
-{
-    bool is_rtc_valid = rtc.IsDateTimeValid();
-    if (rtc.LastError() != 0) return false;
-    if (is_rtc_valid) return true;
-
-    WiFiUDP udp;
-    NTPClient ntp(udp);
-    ntp.begin();
-
-    if (!ntp.forceUpdate()) return false;
-
-    // Subtract 30 years since RTC library uses 2000 epoch but NTP returns time
-    // relative to 1970 epoch
-    rtc.SetDateTime(RtcDateTime(ntp.getEpochTime() - 946684800UL));
-    return (rtc.LastError() == 0) ? true : false;
 }
