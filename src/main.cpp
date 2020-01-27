@@ -19,17 +19,14 @@
 
 
 // Public configuration
-RTC_DATA_ATTR bool NETWORK_ENTERPRISE = false;
-RTC_DATA_ATTR char NETWORK_NAME[32] = { '\0' };
-RTC_DATA_ATTR char NETWORK_USERNAME[64] = { '\0' };
-RTC_DATA_ATTR char NETWORK_PASSWORD[64] = { '\0' };
-RTC_DATA_ATTR char LOGGER_ADDRESS[32] = { '\0' };
-RTC_DATA_ATTR uint16_t LOGGER_PORT = 1883;
-RTC_DATA_ATTR uint8_t NETWORK_CONNECT_TIMEOUT = 10;
-RTC_DATA_ATTR uint8_t LOGGER_CONNECT_TIMEOUT = 10;
-RTC_DATA_ATTR uint8_t LOGGER_SUBSCRIBE_TIMEOUT = 8;
-RTC_DATA_ATTR uint8_t LOGGER_SESSION_TIMEOUT = 8;
-RTC_DATA_ATTR uint8_t LOGGER_REPORT_TIMEOUT = 8;
+RTC_DATA_ATTR bool NETWORK_ENTERPRISE;
+RTC_DATA_ATTR char NETWORK_NAME[32];
+RTC_DATA_ATTR char NETWORK_USERNAME[64];
+RTC_DATA_ATTR char NETWORK_PASSWORD[64];
+RTC_DATA_ATTR char LOGGER_ADDRESS[32];
+RTC_DATA_ATTR uint16_t LOGGER_PORT;
+RTC_DATA_ATTR uint8_t NETWORK_TIMEOUT;
+RTC_DATA_ATTR uint8_t LOGGER_TIMEOUT;
 
 // Private configuration
 #define RTC_SQW_PIN GPIO_NUM_35
@@ -225,15 +222,9 @@ void serial_routine()
 
             length += sprintf(config + length, ", \"lprt\": %u", LOGGER_PORT);
             length += sprintf(
-                config + length, ", \"tncn\": %u", NETWORK_CONNECT_TIMEOUT);
+                config + length, ", \"tnet\": %u", NETWORK_TIMEOUT);
             length += sprintf(
-                config + length, ", \"tlcn\": %u", LOGGER_CONNECT_TIMEOUT);
-            length += sprintf(
-                config + length, ", \"tlsb\": %u", LOGGER_SUBSCRIBE_TIMEOUT);
-            length += sprintf(
-                config + length, ", \"tlss\": %u", LOGGER_SESSION_TIMEOUT);
-            length += sprintf(
-                config + length, ", \"tlrp\": %u", LOGGER_REPORT_TIMEOUT);
+                config + length, ", \"tlog\": %u", LOGGER_TIMEOUT);
             strcat(config + length, " }\n");
             
             Serial.write(config);
@@ -277,24 +268,12 @@ void serial_routine()
                     config.putUShort("lprt", document["lprt"]);
                 else Serial.write("psna_wcf\n");
 
-                if (document.containsKey("tncn"))
-                    config.putUChar("tncn", document["tncn"]);
+                if (document.containsKey("tnet"))
+                    config.putUChar("tnet", document["tnet"]);
                 else Serial.write("psna_wcf\n");
 
-                if (document.containsKey("tlcn"))
-                    config.putUChar("tlcn", document["tlcn"]);
-                else Serial.write("psna_wcf\n");
-
-                if (document.containsKey("tlsb"))
-                    config.putUChar("tlsb", document["tlsb"]);
-                else Serial.write("psna_wcf\n");
-
-                if (document.containsKey("tlss"))
-                    config.putUChar("tlss", document["tlss"]);
-                else Serial.write("psna_wcf\n");
-
-                if (document.containsKey("tlrp"))
-                    config.putUChar("tlrp", document["tlrp"]);
+                if (document.containsKey("tlog"))
+                    config.putUChar("tlog", document["tlog"]);
                 else Serial.write("psna_wcf\n");
 
                 config.end();
@@ -321,8 +300,8 @@ void wake_routine()
         && logger_connect() && logger_subscribe())
     {
         // Only transmit if there's enough time before next alarm
-        while (!buffer.is_empty() && next_alarm - now
-            >= LOGGER_REPORT_TIMEOUT + PRE_ALARM_SLEEP_TIME)
+        while (!buffer.is_empty() && next_alarm - now >= LOGGER_TIMEOUT
+            + PRE_ALARM_SLEEP_TIME)
         {
             report_t report = buffer.pop_rear(reports);
             char report_json[128] = { '\0' };
@@ -413,7 +392,7 @@ bool network_connect()
     int checks = 1;
     while (WiFi.status() != WL_CONNECTED)
     {
-        if (checks++ >= NETWORK_CONNECT_TIMEOUT)
+        if (checks++ >= NETWORK_TIMEOUT)
             return false;
         else delay(1000);
     }
@@ -438,7 +417,7 @@ bool logger_connect()
     int checks = 1;
     while (!logger.connected())
     {
-        if (checks++ >= LOGGER_CONNECT_TIMEOUT)
+        if (checks++ >= LOGGER_TIMEOUT)
             return false;
         else delay(1000);
     }
@@ -467,7 +446,7 @@ bool logger_subscribe()
     int checks = 1;
     while (awaiting_subscribe)
     {
-        if (checks++ >= LOGGER_SUBSCRIBE_TIMEOUT)
+        if (checks++ >= LOGGER_TIMEOUT)
         {
             subscribe_req_id = -1;
             awaiting_subscribe = false;
@@ -505,7 +484,7 @@ bool logger_session()
     int checks = 1;
     while (awaiting_session)
     {
-        if (checks++ >= LOGGER_SESSION_TIMEOUT)
+        if (checks++ >= LOGGER_TIMEOUT)
         {
             for (int i = 0; i < 11; i++)
                 session_req_id[i] = '\0';
@@ -548,7 +527,7 @@ bool logger_report(const char* report, uint32_t time)
     int checks = 1;
     while (awaiting_report)
     {
-        if (checks++ >= LOGGER_REPORT_TIMEOUT)
+        if (checks++ >= LOGGER_TIMEOUT)
         {
             for (int i = 0; i < 11; i++)
                 report_req_id[i] = '\0';
@@ -643,11 +622,8 @@ bool load_configuration()
     strcpy(NETWORK_PASSWORD, config.getString("npwd", String()).c_str());
     strcpy(LOGGER_ADDRESS, config.getString("ladr", String()).c_str());
     LOGGER_PORT = config.getUShort("lprt", 1883);
-    NETWORK_CONNECT_TIMEOUT = config.getUChar("tncn", 10);
-    LOGGER_CONNECT_TIMEOUT = config.getUChar("tlcn", 10);
-    LOGGER_SUBSCRIBE_TIMEOUT = config.getUChar("tlsb", 8);
-    LOGGER_SESSION_TIMEOUT = config.getUChar("tlss", 8);
-    LOGGER_REPORT_TIMEOUT = config.getUChar("tlrp", 8);
+    NETWORK_TIMEOUT = config.getUChar("tnet", 10);
+    LOGGER_TIMEOUT = config.getUChar("tlog", 8);
     config.end();
 
     if (strlen(NETWORK_NAME) == 0 || strlen(NETWORK_PASSWORD) == 0 ||
