@@ -300,10 +300,16 @@ void serial_routine()
  */
 void wake_routine()
 {
-    if (!rtc.IsDateTimeValid()) esp_deep_sleep_start();
+    // Check if RTC time is valid (may have lost power)
+    if (!rtc_time_valid(rtc))
+        esp_deep_sleep_start();
     
+    // Set alarm for next report
     RtcDateTime now = rtc.GetDateTime();
     RtcDateTime next_alarm = now + (session_interval * 60);
+    set_alarm(rtc, next_alarm);
+
+
     generate_report(now);
 
     // Transmit reports in buffer (only if there's enough reports)
@@ -333,8 +339,7 @@ void wake_routine()
         }
     }
 
-    // Set alarm for next report then go into deep sleep
-    set_alarm(rtc, next_alarm);
+    // Go into deep sleep
     esp_sleep_enable_ext0_wakeup(RTC_SQUARE_WAVE_PIN, 0);
     esp_deep_sleep_start();
 }
@@ -380,11 +385,11 @@ void generate_report(const RtcDateTime& time)
 
 
 /*
-    Connects to wifi network or times out (blocking)
+    Connects to WiFi network or times out (blocking)
  */
 bool network_connect()
 {
-    // Configure for enterprise wifi network if required
+    // Configure for enterprise network if required
     if (NETWORK_ENTERPRISE)
     {
         WiFi.mode(WIFI_STA);
@@ -639,7 +644,8 @@ bool load_configuration()
 
     if (strlen(NETWORK_NAME) == 0 || strlen(NETWORK_PASSWORD) == 0 ||
             (NETWORK_ENTERPRISE && strlen(NETWORK_USERNAME) == 0) ||
-            strlen(LOGGER_ADDRESS) == 0)        
+            strlen(LOGGER_ADDRESS) == 0 && NETWORK_TIMEOUT <= 13 &&
+            LOGGER_TIMEOUT <= 13)
         return false;
     else return true;
 }

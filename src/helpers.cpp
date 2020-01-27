@@ -7,6 +7,22 @@
 
 
 /*
+    Checks if the RTC is holding a valid timestamp
+*/
+bool rtc_time_valid(RtcDS3231<TwoWire>& rtc)
+{
+    bool rtc_valid = rtc.IsDateTimeValid();
+
+    if (!rtc.LastError())
+    {
+        if (!rtc_valid) return false;
+    }
+    else return false;
+    
+    return true;
+}
+
+/*
     Sets the RTC alarm to the specified time
  */
 void set_alarm(RtcDS3231<TwoWire>& rtc, const RtcDateTime& time)
