@@ -55,10 +55,6 @@ void report_to_string(char* report_out, const report_t& report, int session)
         length += sprintf(report_out + length, ", \"relh\": %.2f", report.relh);
     else length += sprintf(report_out + length, ", \"relh\": null");
 
-    if (report.lght != -99)
-        length += sprintf(report_out + length, ", \"lght\": %ld", report.lght);
-    else length += sprintf(report_out + length, ", \"lght\": null");
-
     if (report.batv != -99)
         length += sprintf(report_out + length, ", \"batv\": %.2f", report.batv);
     else length += sprintf(report_out + length, ", \"batv\": null");
