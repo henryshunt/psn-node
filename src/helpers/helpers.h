@@ -22,7 +22,7 @@ struct report_t
     float batv;
 };
 
-bool rtc_time_valid(RtcDS3231<TwoWire>&);
+bool is_rtc_time_valid(RtcDS3231<TwoWire>&);
 void set_alarm(RtcDS3231<TwoWire>&, const RtcDateTime&);
 void report_to_string(char*, const report_t&, int);
 int round_up(int, int);

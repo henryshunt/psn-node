@@ -14,8 +14,6 @@ RTC_DATA_ATTR session_t session;
 RTC_DATA_ATTR report_buffer_t buffer;
 RTC_DATA_ATTR report_t reports[BUFFER_SIZE];
 
-RtcDS3231<TwoWire> rtc(Wire);
-
 
 /*
     Performs setup, retrieves the session, and sets an alarm for the first report
@@ -57,7 +55,7 @@ void setup()
         if (!config_valid) esp_deep_sleep_start();
 
         // Check RTC time is valid (may not be set or may have lost battery power)
-        if (!rtc_time_valid(rtc)) esp_deep_sleep_start();
+        if (!is_rtc_time_valid(rtc)) esp_deep_sleep_start();
 
 
         // Connect to network and logging server, and reboot on failure. NOTE: I cannot
@@ -81,7 +79,7 @@ void setup()
 
         while (true)
         {
-            session_status = logger_session(&session);
+            session_status = logger_get_session(&session);
             if (session_status == RequestResult::Fail)
             {
                 if (!is_network_connected() || !is_logger_connected())
@@ -93,7 +91,7 @@ void setup()
         if (session_status == RequestResult::NoSession) esp_deep_sleep_start();
 
 
-        buffer.maximum_size = BUFFER_SIZE;
+        buffer.size = BUFFER_SIZE;
         rtc.SetSquareWavePin(DS3231SquareWavePin_ModeAlarmOne);
 
         RtcDateTime first_alarm = rtc.GetDateTime();
@@ -119,12 +117,12 @@ void loop() { }
 
 
 /*
-    Generates a report, sets an alarm for the next report, transmits reports, sleeps
+    Generates a report, sets an alarm for the next report, sends all reports, sleeps
  */
 void wake_routine()
 {
     // Check if the RTC time is valid (may have lost battery power)
-    if (!rtc_time_valid(rtc)) esp_deep_sleep_start();
+    if (!is_rtc_time_valid(rtc)) esp_deep_sleep_start();
     
     // Set alarm for next report
     RtcDateTime now = rtc.GetDateTime();
@@ -134,12 +132,12 @@ void wake_routine()
 
     generate_report(now);
 
-    // Transmit reports in the buffer if there's a big enough number of them
+    // Send reports in the buffer if there's a big enough number of them
     if (buffer.count >= session.batch_size && network_connect() && logger_connect()
         && logger_subscribe())
     {
-        // Only transmit if there's enough time before the next alarm
-        while (!buffer.is_empty() && next_alarm - rtc.GetDateTime() >= LOGGER_TIMEOUT
+        // Only send if there's enough time before the next alarm
+        while (!buffer.is_empty() && next_alarm - rtc.GetDateTime() >= logger_timeout
             + ALARM_SET_THRESHOLD)
         {
             report_t report = buffer.pop_rear(reports);
@@ -147,8 +145,8 @@ void wake_routine()
             report_to_string(report_json, report, session.session);
             Serial.println(report_json);
 
-            // Transmit the report. Add it back to the buffer if the transmition failed
-            RequestResult report_status = logger_report(report_json);
+            // Send the report. Add it back to the buffer if the send failed
+            RequestResult report_status = logger_send_report(report_json);
             if (report_status == RequestResult::Fail)
             {
                 buffer.push_rear(reports, report);

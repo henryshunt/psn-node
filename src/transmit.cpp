@@ -1,8 +1,8 @@
 #include <WiFi.h>
 #include <esp_wpa2.h>
 
-#include "AsyncMqttClient.h"
-#include "ArduinoJson.h"
+#include <AsyncMqttClient.h>
+#include <ArduinoJson.h>
 
 #include "transmit.h"
 #include "globals.h"
@@ -28,25 +28,25 @@ AsyncMqttClient logger;
 bool network_connect()
 {
     // Configure for enterprise network if required
-    if (NETWORK_ENTERPRISE)
+    if (is_enterprise_network)
     {
         WiFi.mode(WIFI_STA);
         esp_wifi_sta_wpa2_ent_set_username(
-            (uint8_t *)NETWORK_USERNAME, strlen(NETWORK_USERNAME));
+            (uint8_t *)network_username, strlen(network_username));
         esp_wifi_sta_wpa2_ent_set_password(
-            (uint8_t *)NETWORK_PASSWORD, strlen(NETWORK_PASSWORD));
+            (uint8_t *)network_password, strlen(network_password));
         esp_wpa2_config_t config = WPA2_CONFIG_INIT_DEFAULT();
         esp_wifi_sta_wpa2_ent_enable(&config);
     }
 
-    WiFi.begin(NETWORK_NAME, NETWORK_PASSWORD);
+    WiFi.begin(network_name, network_password);
     delay(1000);
 
     // Check connection status and timeout after set time
     int checks = 1;
     while (WiFi.status() != WL_CONNECTED)
     {
-        if (checks++ >= NETWORK_TIMEOUT)
+        if (checks++ >= network_timeout)
             return false;
         else delay(1000);
     }
@@ -72,7 +72,7 @@ bool logger_connect()
 
     logger.onSubscribe(logger_on_subscribe);
     logger.onMessage(logger_on_message);
-    logger.setServer(LOGGER_ADDRESS, LOGGER_PORT);
+    logger.setServer(logger_address, logger_port);
     logger.connect();
     delay(1000);
 
@@ -80,7 +80,7 @@ bool logger_connect()
     int checks = 1;
     while (!logger.connected())
     {
-        if (checks++ >= LOGGER_TIMEOUT)
+        if (checks++ >= logger_timeout)
             return false;
         else delay(1000);
     }
@@ -119,7 +119,7 @@ bool logger_subscribe()
     int checks = 1;
     while (awaiting_subscribe)
     {
-        if (checks++ >= LOGGER_TIMEOUT)
+        if (checks++ >= logger_timeout)
         {
             awaiting_subscribe = false;
             return false;
@@ -132,7 +132,7 @@ bool logger_subscribe()
 /*
     Sends session request, waits for response or times out (blocking)
  */
-RequestResult logger_session(session_t* session_out)
+RequestResult logger_get_session(session_t* session_out)
 {
     char outbound_topic[64] = { '\0' };
     sprintf(outbound_topic, "nodes/%s/outbound/%u", mac_address, ++publish_id);
@@ -149,7 +149,7 @@ RequestResult logger_session(session_t* session_out)
     int checks = 1;
     while (awaiting_session)
     {
-        if (checks++ >= LOGGER_TIMEOUT)
+        if (checks++ >= logger_timeout)
         {
             awaiting_session = false;
             return RequestResult::Fail;
@@ -164,7 +164,7 @@ RequestResult logger_session(session_t* session_out)
 /*
     Sends report, waits for response or times out (blocking)
  */
-RequestResult logger_report(const char* report)
+RequestResult logger_send_report(const char* report)
 {
     char reports_topic[64] = { '\0' };
     sprintf(reports_topic, "nodes/%s/reports/%u", mac_address, ++publish_id);
@@ -181,7 +181,7 @@ RequestResult logger_report(const char* report)
     int checks = 1;
     while (awaiting_report)
     {
-        if (checks++ >= LOGGER_TIMEOUT)
+        if (checks++ >= logger_timeout)
         {
             awaiting_report = false;
             return RequestResult::Fail;
@@ -224,6 +224,9 @@ void logger_on_message(char* topic, char* payload,
     {
         if (strcmp(message, "no_session") == 0)
             session_result = RequestResult::NoSession;
+        else if (strcmp(message, "error") == 0)
+            session_result = RequestResult::Fail;
+
         else
         {
             StaticJsonDocument<JSON_OBJECT_SIZE(3)> document;
@@ -272,12 +275,14 @@ void logger_on_message(char* topic, char* payload,
                         // The interval is valid, so perform the rest of the checks
                         if (allowed_intervals[i] == temp_session.interval)
                         {
-                            if (temp_session.session >= 0 && temp_session.batch_size > 0) {
+                            if (temp_session.session >= 0 && temp_session.batch_size > 0)
+                            {
                                 new_session = temp_session;
                                 session_result = RequestResult::Success;
                                 awaiting_session = false;
                                 return;
-                            } else session_result = RequestResult::Fail;
+                            }
+                            else session_result = RequestResult::Fail;
                         }
                     }
 

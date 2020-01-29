@@ -1,18 +1,23 @@
+#include <Wire.h>
 #include <Preferences.h>
+
+#include <RtcDS3231.h>
 
 #include "globals.h"
 
 
 RTC_DATA_ATTR char mac_address[18] = { '\0' };
 
-RTC_DATA_ATTR bool NETWORK_ENTERPRISE;
-RTC_DATA_ATTR char NETWORK_NAME[32] = { '\0' };
-RTC_DATA_ATTR char NETWORK_USERNAME[64] = { '\0' };
-RTC_DATA_ATTR char NETWORK_PASSWORD[64] = { '\0' };
-RTC_DATA_ATTR char LOGGER_ADDRESS[32] = { '\0' };
-RTC_DATA_ATTR uint16_t LOGGER_PORT;
-RTC_DATA_ATTR uint8_t NETWORK_TIMEOUT;
-RTC_DATA_ATTR uint8_t LOGGER_TIMEOUT;
+RTC_DATA_ATTR char network_name[32] = { '\0' };
+RTC_DATA_ATTR bool is_enterprise_network;
+RTC_DATA_ATTR char network_username[64] = { '\0' };
+RTC_DATA_ATTR char network_password[64] = { '\0' };
+RTC_DATA_ATTR char logger_address[32] = { '\0' };
+RTC_DATA_ATTR uint16_t logger_port;
+RTC_DATA_ATTR uint8_t network_timeout;
+RTC_DATA_ATTR uint8_t logger_timeout;
+
+RtcDS3231<TwoWire> rtc(Wire);
 
 
 /*
@@ -35,27 +40,26 @@ bool load_configuration(bool* valid_out)
     Preferences preferences;
     if (!preferences.begin("psn", true)) return false;
     
-    NETWORK_ENTERPRISE = preferences.getBool("nent");
-    strcpy(NETWORK_NAME, preferences.getString("nnam").c_str());
-    strcpy(NETWORK_USERNAME, preferences.getString("nunm").c_str());
-    strcpy(NETWORK_PASSWORD, preferences.getString("npwd").c_str());
-    strcpy(LOGGER_ADDRESS, preferences.getString("ladr").c_str());
-    LOGGER_PORT = preferences.getUShort("lprt");
-    NETWORK_TIMEOUT = preferences.getUChar("tnet");
-    LOGGER_TIMEOUT = preferences.getUChar("tlog");
+    strcpy(network_name, preferences.getString("nnam").c_str());
+    is_enterprise_network = preferences.getBool("nent");
+    strcpy(network_username, preferences.getString("nunm").c_str());
+    strcpy(network_password, preferences.getString("npwd").c_str());
+    strcpy(logger_address, preferences.getString("ladr").c_str());
+    logger_port = preferences.getUShort("lprt");
+    network_timeout = preferences.getUChar("tnet");
+    logger_timeout = preferences.getUChar("tlog");
     preferences.end();
 
     bool valid = true;
 
     // Check validity of loaded configuration
-    if (strlen(NETWORK_NAME) == 0) valid = false;
-    if (NETWORK_ENTERPRISE && (strlen(NETWORK_USERNAME) == 0 || strlen(NETWORK_PASSWORD) == 0))
-        valid = false;
-
-    if (strlen(LOGGER_ADDRESS) == 0) valid = false;
-    if (LOGGER_PORT < 1024) valid = false;
-    if (NETWORK_TIMEOUT < 1 || NETWORK_TIMEOUT > 13) valid = false;
-    if (LOGGER_TIMEOUT < 1 || LOGGER_TIMEOUT > 13) valid = false;
+    if (strlen(network_name) == 0) valid = false;
+    if (is_enterprise_network && (strlen(network_username) == 0 ||
+        strlen(network_password) == 0)) valid = false;
+    if (strlen(logger_address) == 0) valid = false;
+    if (logger_port < 1024) valid = false;
+    if (network_timeout < 1 || network_timeout > 13) valid = false;
+    if (logger_timeout < 1 || logger_timeout > 13) valid = false;
 
     *valid_out = valid;
     return true;

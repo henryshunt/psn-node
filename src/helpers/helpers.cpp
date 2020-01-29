@@ -9,7 +9,7 @@
 /*
     Checks if the RTC is holding a valid timestamp
 */
-bool rtc_time_valid(RtcDS3231<TwoWire>& rtc)
+bool is_rtc_time_valid(RtcDS3231<TwoWire>& rtc)
 {
     bool rtc_valid = rtc.IsDateTimeValid();
     if (!rtc.LastError())
@@ -80,6 +80,6 @@ int round_up(int number, int multiple)
 */
 void format_time(char* time_out, const RtcDateTime& time)
 {
-    sprintf(time_out, "%04u-%02u-%02uT%02u:%02u:%02u", time.Year(),
+    sprintf(time_out, "%04u-%02u-%02uT%02u:%02u:%02uZ", time.Year(),
         time.Month(), time.Day(), time.Hour(), time.Minute(), time.Second());
 }

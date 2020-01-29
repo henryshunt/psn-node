@@ -1,4 +1,4 @@
-#include "AsyncMqttClient.h"
+#include <AsyncMqttClient.h>
 
 #include "helpers/helpers.h"
 
@@ -10,8 +10,8 @@ bool logger_connect();
 bool is_logger_connected();
 
 bool logger_subscribe();
-RequestResult logger_session(session_t*);
-RequestResult logger_report(const char*);
+RequestResult logger_get_session(session_t*);
+RequestResult logger_send_report(const char*);
 
 void logger_on_subscribe(uint16_t, uint8_t);
 void logger_on_message(char*, char*,

@@ -1,8 +1,8 @@
-#include <nvs_flash.h>
 #include <Preferences.h>
 
-#include "ArduinoJson.h"
+#include <ArduinoJson.h>
 
+#include "serial.h"
 #include "globals.h"
 #include "helpers/helpers.h"
 
@@ -29,199 +29,267 @@ void serial_routine()
             }
         }
 
-        
-        // Respond to ping command
+        // Process the received command
         if (strncmp(command, "psn_pn", 6) == 0)
-            Serial.write("psn_pn\n");
-        
-        // Respond to read configuration command
+            process_pn_command();
         else if (strncmp(command, "psn_rc", 6) == 0)
+            process_rc_command();
+        else if (strncmp(command, "psn_wc", 6) == 0)
+            process_wc_command(command);
+        else if (strncmp(command, "psn_rt", 6) == 0)
+            process_rt_command();
+        else if (strncmp(command, "psn_wt", 6) == 0)
+            process_wt_command(command);
+    }
+}
+
+
+/*
+    Processes and responds to the ping command
+ */
+void process_pn_command()
+{
+    Serial.write("psn_pn\n");
+}
+
+/*
+    Processes and responds to the read configuration command
+ */
+void process_rc_command()
+{
+    char response[335] = { '\0' };
+    int length = 0;
+
+    length += sprintf(response, "psn_rc { \"madr\": \"%s\"", mac_address);
+    length += sprintf(response + length, ", \"nnam\": \"%s\"", network_name);
+    length += sprintf(response + length,
+        ", \"nent\": %s", is_enterprise_network ? "true" : "false");
+    length += sprintf(response + length, ", \"nunm\": \"%s\"", network_username);
+    length += sprintf(response + length, ", \"npwd\": \"%s\"", network_password);
+    length += sprintf(response + length, ", \"ladr\": \"%s\"", logger_address);
+    length += sprintf(response + length, ", \"lprt\": %u", logger_port);
+    length += sprintf(response + length, ", \"tnet\": %u", network_timeout);
+    length += sprintf(response + length, ", \"tlog\": %u", logger_timeout);
+    strcat(response + length, " }\n");
+    
+    Serial.write(response);
+}
+
+/*
+    Processes and responds to the write configuration command
+ */
+void process_wc_command(const char* command)
+{
+    // Check if there's at least the first character of a JSON object
+    if (strncmp(command, "psn_wc {", 8) != 0)
+    {
+        Serial.write("psn_wcf\n");
+        return;
+    }
+
+    // Deserialise the JSON string containing the new configuration
+    StaticJsonDocument<JSON_OBJECT_SIZE(32)> document;
+    DeserializationError error = deserializeJson(document, command + 7);
+    
+    if (error)
+    {
+        Serial.write("psn_wcf\n");
+        return;
+    }
+
+    JsonObject json_object = document.as<JsonObject>();
+    bool field_error = false;
+
+    char new_network_name[32] = { '\0' };
+    bool new_is_enterprise_network = false;
+    char new_network_username[64] = { '\0' };
+    char new_network_password[64] = { '\0' };
+    char new_logger_address[32] = { '\0' };
+    uint16_t new_logger_port = 0;
+    uint8_t new_network_timeout = 0;
+    uint8_t new_logger_timeout = 0;
+
+
+    if (json_object.containsKey("nnam"))
+    {
+        JsonVariant value = json_object.getMember("nnam");
+        if (value.is<char*>())
+        {
+            if (strlen(value) > 0 && strlen(value) <= 31)
+                strcpy(new_network_name, value);
+            else field_error = true;
+        } else field_error = true;
+    } else field_error = true;
+
+    if (json_object.containsKey("nent"))
+    {
+        JsonVariant value = json_object.getMember("nent");
+        if (value.is<bool>())
+            new_is_enterprise_network = value;
+        else field_error = true;
+    } else field_error = true;
+
+    if (json_object.containsKey("nunm"))
+    {
+        JsonVariant value = json_object.getMember("nunm");
+        if (value.is<char*>())
+        {
+            if (strlen(value) <= 63)
+                strcpy(new_network_username, value);
+            else field_error = true;
+        } else field_error = true;
+    } else field_error = true;
+
+    if (json_object.containsKey("npwd"))
+    {
+        JsonVariant value = json_object.getMember("npwd");
+        if (value.is<char*>())
+        {
+            if (strlen(value) <= 63)
+                strcpy(new_network_password, value);
+            else field_error = true;
+        } else field_error = true;
+    } else field_error = true;
+
+    if (json_object.containsKey("ladr"))
+    {
+        JsonVariant value = json_object.getMember("ladr");
+        if (value.is<char*>())
+        {
+            if (strlen(value) > 0 && strlen(value) <= 31)
+                strcpy(new_logger_address, value);
+            else field_error = true;
+        } else field_error = true;
+    } else field_error = true;
+
+    if (json_object.containsKey("lprt"))
+    {
+        JsonVariant value = json_object.getMember("lprt");
+        if (value.is<uint16_t>())
+            new_logger_port = value;
+        else field_error = true;
+    } else field_error = true;
+
+    if (json_object.containsKey("tnet"))
+    {
+        JsonVariant value = json_object.getMember("tnet");
+        if (value.is<uint8_t>())
+            new_network_timeout = value;
+        else field_error = true;
+    } else field_error = true;
+
+    if (json_object.containsKey("tlog"))
+    {
+        JsonVariant value = json_object.getMember("tlog");
+        if (value.is<uint8_t>())
+            new_logger_timeout = value;
+        else field_error = true;
+    } else field_error = true;
+
+
+    if (field_error)
+    {
+        Serial.write("psn_wcf\n");
+        return;
+    }
+
+    // Check validity of new configuration (some 0 length checks already done above)
+    if (new_is_enterprise_network && (strlen(new_network_username) == 0 ||
+        strlen(new_network_password) == 0)) field_error = false;
+    if (new_logger_port < 1024) field_error = false;
+    if (new_network_timeout < 1 || new_network_timeout > 13) field_error = false;
+    if (new_logger_timeout < 1 || new_logger_timeout > 13) field_error = false;
+
+    if (field_error)
+    {
+        Serial.write("psn_wcf\n");
+        return;
+    }
+
+
+    // Write the new configuration to non-volatile storage
+    Preferences preferences;
+    if (!preferences.begin("psn", false))
+    {
+        Serial.write("psn_wcf\n");
+        return;
+    }
+
+    preferences.putString("nnam", new_network_name);
+    preferences.putBool("nent", new_is_enterprise_network);
+    preferences.putString("nunm", new_network_username);
+    preferences.putString("npwd", new_network_password);
+    preferences.putString("ladr", new_logger_address);
+    preferences.putUShort("lprt", new_logger_port);
+    preferences.putUChar("tnet", new_network_timeout);
+    preferences.putUChar("tlog", new_logger_timeout);
+    preferences.end();
+
+    Serial.write("psn_wcs\n");
+}
+
+/*
+    Processes and responds to the read time command
+ */
+void process_rt_command()
+{
+    RtcDateTime now = rtc.GetDateTime();
+    if (!rtc.LastError())
+    {
+        bool is_time_valid = rtc.IsDateTimeValid();
+        if (!rtc.LastError())
         {
             char response[335] = { '\0' };
             int length = 0;
-    
-            length += sprintf(
-                response, "psn_rc { \"madr\": \"%s\"", mac_address);
+
+            char formatted_time[21] = { '\0' };
+            format_time(formatted_time, now);
+
+            length += sprintf(response, "psn_rt { \"time\": \"%s\"", formatted_time);
             length += sprintf(response + length,
-                ", \"nent\": %s", NETWORK_ENTERPRISE ? "true" : "false");
-
-            if (NETWORK_NAME[0] != '\0')
-            {
-                length += sprintf(
-                    response + length, ", \"nnam\": \"%s\"", NETWORK_NAME);
-            } else length += sprintf(response + length, ", \"nnam\": \"\"");
-
-            if (NETWORK_USERNAME[0] != '\0')
-            {
-                length += sprintf(
-                    response + length, ", \"nunm\": \"%s\"", NETWORK_USERNAME);
-            } else length += sprintf(response + length, ", \"nunm\": \"\"");
-
-            if (NETWORK_PASSWORD[0] != '\0')
-            {
-                length += sprintf(
-                    response + length, ", \"npwd\": \"%s\"", NETWORK_PASSWORD);
-            } else length += sprintf(response + length, ", \"npwd\": \"\"");
-
-            if (LOGGER_ADDRESS[0] != '\0')
-            {
-                length += sprintf(
-                    response + length, ", \"ladr\": \"%s\"", LOGGER_ADDRESS);
-            } else length += sprintf(response + length, ", \"ladr\": \"\"");
-
-            length += sprintf(response + length, ", \"lprt\": %u", LOGGER_PORT);
-            length += sprintf(
-                response + length, ", \"tnet\": %u", NETWORK_TIMEOUT);
-            length += sprintf(
-                response + length, ", \"tlog\": %u", LOGGER_TIMEOUT);
+                ", \"tvld\": %s", is_time_valid ? "true" : "false");
             strcat(response + length, " }\n");
-            
+
             Serial.write(response);
-        }
+        } else Serial.write("psn_rtf\n");
+    } else Serial.write("psn_rtf\n");
+}
 
-        // Respond to write configuration command
-        else if (strncmp(command, "psn_wc {", 8) == 0)
-        {
-            StaticJsonDocument<JSON_OBJECT_SIZE(8)> document;
-            DeserializationError error = deserializeJson(document, command + 7);
-            
-            if (error)
-            {
-                Serial.write("psn_wcf\n");
-                continue;
-            }
-
-            JsonObject json_object = document.as<JsonObject>();
-            bool field_error = false;
-
-            bool NEW_NETWORK_ENTERPRISE;
-            char NEW_NETWORK_NAME[32] = { '\0' };
-            char NEW_NETWORK_USERNAME[64] = { '\0' };
-            char NEW_NETWORK_PASSWORD[64] = { '\0' };
-            char NEW_LOGGER_ADDRESS[32] = { '\0' };
-            uint16_t NEW_LOGGER_PORT;
-            uint8_t NEW_NETWORK_TIMEOUT;
-            uint8_t NEW_LOGGER_TIMEOUT;
-
-
-            if (json_object.containsKey("nent"))
-            {
-                JsonVariant value = json_object.getMember("nent");
-                if (value.is<bool>())
-                    NEW_NETWORK_ENTERPRISE = value;
-                else field_error = true;
-            } else field_error = true;
-
-            if (json_object.containsKey("nnam"))
-            {
-                JsonVariant value = json_object.getMember("nnam");
-                if (value.is<char*>())
-                {
-                    if (value[0] != '\0' && strlen(value) <= 31)
-                        strcpy(NEW_NETWORK_NAME, value);
-                    else field_error = true;
-                } else field_error = true;
-            } else field_error = true;
-
-            if (json_object.containsKey("nunm"))
-            {
-                JsonVariant value = json_object.getMember("nunm");
-                if (value.is<char*>())
-                {
-                    if (value[0] != '\0')
-                    {
-                        if (strlen(value) <= 63)
-                            strcpy(NEW_NETWORK_USERNAME, value);
-                        else field_error = true;
-                    }
-                } else field_error = true;
-            } else field_error = true;
-
-            if (json_object.containsKey("npwd"))
-            {
-                JsonVariant value = json_object.getMember("npwd");
-                if (value.is<char*>())
-                {
-                    if (value[0] != '\0')
-                    {
-                        if (strlen(value) <= 63)
-                            strcpy(NEW_NETWORK_PASSWORD, value);
-                        else field_error = true;
-                    }
-                } else field_error = true;
-            } else field_error = true;
-
-            if (json_object.containsKey("ladr"))
-            {
-                JsonVariant value = json_object.getMember("ladr");
-                if (value.is<char*>())
-                {
-                    if (value[0] != '\0' && strlen(value) <= 31)
-                        strcpy(NEW_LOGGER_ADDRESS, value);
-                    else field_error = true;
-                } else field_error = true;
-            } else field_error = true;
-
-            if (json_object.containsKey("lprt"))
-            {
-                JsonVariant value = json_object.getMember("lprt");
-                if (value.is<uint16_t>())
-                    NEW_LOGGER_TIMEOUT = value;
-                else field_error = true;
-            } else field_error = true;
-
-            if (json_object.containsKey("tnet"))
-            {
-                JsonVariant value = json_object.getMember("tnet");
-                if (value.is<uint8_t>())
-                    NEW_NETWORK_TIMEOUT = value;
-                else field_error = true;
-            } else field_error = true;
-
-            if (json_object.containsKey("tlog"))
-            {
-                JsonVariant value = json_object.getMember("tlog");
-                if (value.is<uint8_t>())
-                    NEW_LOGGER_TIMEOUT = value;
-                else field_error = true;
-            } else field_error = true;
-
-            if (field_error)
-            {
-                Serial.write("psn_wcf\n");
-                continue;
-            }
-
-
-            // Check validity of new configuration
-            if ((NEW_NETWORK_ENTERPRISE && (NEW_NETWORK_USERNAME[0] == '\0' ||
-                NEW_NETWORK_PASSWORD[0] == '\0')) || NEW_LOGGER_PORT < 1024 || 
-                NEW_NETWORK_TIMEOUT < 1 || NEW_NETWORK_TIMEOUT > 13 || 
-                NEW_LOGGER_TIMEOUT < 1 || NEW_LOGGER_TIMEOUT > 13)
-            {
-                Serial.write("psn_wcf\n");
-                continue;
-            }
-
-            // Write the new configuration to non-volatile storage
-            Preferences preferences;
-            if (!preferences.begin("psn", false))
-            {
-                Serial.write("psn_wcf\n");
-                continue;
-            }
-
-            preferences.putBool("nent", NEW_NETWORK_ENTERPRISE);
-            preferences.putString("nnam", NEW_NETWORK_NAME);
-            preferences.putString("nunm", NEW_NETWORK_USERNAME);
-            preferences.putString("npwd", NEW_NETWORK_PASSWORD);
-            preferences.putString("ladr", NEW_LOGGER_ADDRESS);
-            preferences.putUShort("lprt", NEW_LOGGER_PORT);
-            preferences.putUChar("tnet", NEW_NETWORK_TIMEOUT);
-            preferences.putUChar("tlog", NEW_LOGGER_TIMEOUT);
-
-            preferences.end();
-            Serial.write("psn_wcs\n");
-        }
+/*
+    Processes and responds to the write time command
+ */
+void process_wt_command(const char* command)
+{
+    // Check if there's at least the first character of a JSON object
+    if (strncmp(command, "psn_wt {", 8) != 0)
+    {
+        Serial.write("psn_wtf\n");
+        return;
     }
+
+    // Deserialise the JSON string containing the new configuration
+    StaticJsonDocument<JSON_OBJECT_SIZE(32)> document;
+    DeserializationError error = deserializeJson(document, command + 7);
+    
+    if (error)
+    {
+        Serial.write("psn_wtf\n");
+        return;
+    }
+
+    JsonObject json_object = document.as<JsonObject>();
+
+    // If the JSON contains a valid time value then set the RTC time to it
+    if (json_object.containsKey("time"))
+    {
+        JsonVariant value = json_object.getMember("time");
+        if (value.is<uint32_t>())
+        {
+            rtc.SetDateTime(RtcDateTime((uint32_t)value));
+
+            if (!rtc.LastError())
+                Serial.write("psn_wts\n");
+            else Serial.write("psn_wtf\n");
+        } else Serial.write("psn_wtf\n");
+    } else Serial.write("psn_wtf\n");
 }
