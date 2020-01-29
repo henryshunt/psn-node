@@ -12,13 +12,11 @@
 bool rtc_time_valid(RtcDS3231<TwoWire>& rtc)
 {
     bool rtc_valid = rtc.IsDateTimeValid();
-
     if (!rtc.LastError())
     {
         if (!rtc_valid) return false;
-    }
-    else return false;
-    
+    } else return false;
+
     return true;
 }
 
