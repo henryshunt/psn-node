@@ -6,6 +6,8 @@
 #ifndef HELPERS_H
 #define HELPERS_H
 
+enum RequestResult { Success, Fail, NoSession };
+
 struct session_t
 {
     int32_t session;
@@ -13,7 +15,6 @@ struct session_t
     int8_t batch_size;
 };
 
-enum RequestResult { Success, Fail, NoSession };
 struct report_t
 {
     uint32_t time;
@@ -22,9 +23,9 @@ struct report_t
     float batv;
 };
 
+
 bool is_rtc_time_valid(RtcDS3231<TwoWire>&);
-void set_alarm(RtcDS3231<TwoWire>&, const RtcDateTime&);
-void report_to_string(char*, const report_t&, int);
+void set_rtc_alarm(RtcDS3231<TwoWire>&, const RtcDateTime&);
 int round_up(int, int);
 void format_time(char*, const RtcDateTime&);
 #endif

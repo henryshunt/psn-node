@@ -20,7 +20,6 @@ RTC_DATA_ATTR report_t reports[BUFFER_SIZE];
  */
 void setup()
 {
-    Serial.begin(9600);
     rtc.Begin();
 
     if (cold_boot)
@@ -34,6 +33,8 @@ void setup()
 
 
         // Permanently enter serial mode if serial data is received before timeout
+        Serial.begin(9600);
+        
         bool serial_mode = true;
         delay(1000);
 
@@ -105,7 +106,7 @@ void setup()
             first_alarm += session.interval * 60;
 
         // Set alarm to trigger the first report then go into deep sleep
-        set_alarm(rtc, first_alarm);
+        set_rtc_alarm(rtc, first_alarm);
         esp_sleep_enable_ext0_wakeup(RTC_SQUARE_WAVE_PIN, 0);
         cold_boot = false;
         esp_deep_sleep_start();
@@ -127,7 +128,7 @@ void wake_routine()
     // Set alarm for next report
     RtcDateTime now = rtc.GetDateTime();
     RtcDateTime next_alarm = now + (session.interval * 60);
-    set_alarm(rtc, next_alarm);
+    set_rtc_alarm(rtc, next_alarm);
 
 
     generate_report(now);
@@ -142,7 +143,7 @@ void wake_routine()
         {
             report_t report = buffer.pop_rear(reports);
             char report_json[128] = { '\0' };
-            report_to_string(report_json, report, session.session);
+            serialise_report(report_json, report, session);
             Serial.println(report_json);
 
             // Send the report. Add it back to the buffer if the send failed
@@ -169,7 +170,7 @@ void wake_routine()
  */
 void generate_report(const RtcDateTime& time)
 {
-    report_t report = { time, -99, -99, -99 };
+    report_t report = { (uint32_t)time, -99, -99, -99 };
 
     // Sample temperature and humidity
     Adafruit_BME680 bme680;
@@ -189,4 +190,32 @@ void generate_report(const RtcDateTime& time)
     // report.batv = ...
 
     buffer.push_front(reports, report);
+}
+
+/*
+    Serialises the supplied report into a JSON string
+ */
+void serialise_report(char* report_out, const report_t& report,
+    const session_t& session)
+{
+    int length = 0;
+    length += sprintf(report_out, "{ \"session\": %d", session.session);
+
+    char formatted_time[32] = { '\0' };
+    format_time(formatted_time, RtcDateTime(report.time));
+    length += sprintf(report_out + length, ", \"time\": \"%s\"", formatted_time);
+
+    if (report.airt != -99)
+        length += sprintf(report_out + length, ", \"airt\": %.1f", report.airt);
+    else length += sprintf(report_out + length, ", \"airt\": null");
+
+    if (report.relh != -99)
+        length += sprintf(report_out + length, ", \"relh\": %.1f", report.relh);
+    else length += sprintf(report_out + length, ", \"relh\": null");
+
+    if (report.batv != -99)
+        length += sprintf(report_out + length, ", \"batv\": %.2f", report.batv);
+    else length += sprintf(report_out + length, ", \"batv\": null");
+
+    strcat(report_out + length, " }");
 }

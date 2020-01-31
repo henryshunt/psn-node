@@ -21,7 +21,7 @@ private:
      */
     bool is_full()
     {
-        return (count == size) ? true : false;
+        return count == size ? true : false;
     }
 
 public:
@@ -33,7 +33,7 @@ public:
      */
     bool is_empty()
     {
-        return (count == 0) ? true : false;
+        return count == 0 ? true : false;
     }
 
     /*

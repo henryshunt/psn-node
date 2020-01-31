@@ -57,21 +57,13 @@ void process_pn_command()
  */
 void process_rc_command()
 {
-    char response[335] = { '\0' };
-    int length = 0;
-
-    length += sprintf(response, "psn_rc { \"madr\": \"%s\"", mac_address);
-    length += sprintf(response + length, ", \"nnam\": \"%s\"", network_name);
-    length += sprintf(response + length,
-        ", \"nent\": %s", is_enterprise_network ? "true" : "false");
-    length += sprintf(response + length, ", \"nunm\": \"%s\"", network_username);
-    length += sprintf(response + length, ", \"npwd\": \"%s\"", network_password);
-    length += sprintf(response + length, ", \"ladr\": \"%s\"", logger_address);
-    length += sprintf(response + length, ", \"lprt\": %u", logger_port);
-    length += sprintf(response + length, ", \"tnet\": %u", network_timeout);
-    length += sprintf(response + length, ", \"tlog\": %u", logger_timeout);
-    strcat(response + length, " }\n");
+    const char* format = "psn_rc { \"madr\": \"%s\", \"nnam\": \"%s\", \"nent\": %s, \"nunm\": "
+        "\"%s\", \"npwd\": \"%s\", \"ladr\": \"%s\", \"lprt\": %u, \"tnet\": %u, \"tlog\": %u }\n";
     
+    char response[335] = { '\0' };
+    sprintf(response, format, mac_address, network_name, is_enterprise_network ? "true" : "false",
+        network_username, network_password, logger_address, logger_port, network_timeout,
+        logger_timeout);
     Serial.write(response);
 }
 
@@ -239,17 +231,13 @@ void process_rt_command()
         bool is_time_valid = rtc.IsDateTimeValid();
         if (!rtc.LastError())
         {
-            char response[335] = { '\0' };
-            int length = 0;
+            const char* format = "psn_rt { \"time\": \"%s\", \"tvld\": %s }\n";
 
             char formatted_time[21] = { '\0' };
             format_time(formatted_time, now);
 
-            length += sprintf(response, "psn_rt { \"time\": \"%s\"", formatted_time);
-            length += sprintf(response + length,
-                ", \"tvld\": %s", is_time_valid ? "true" : "false");
-            strcat(response + length, " }\n");
-
+            char response[335] = { '\0' };
+            sprintf(response, format, formatted_time, is_time_valid ? "true" : "false");
             Serial.write(response);
         } else Serial.write("psn_rtf\n");
     } else Serial.write("psn_rtf\n");
@@ -286,10 +274,7 @@ void process_wt_command(const char* command)
         if (value.is<uint32_t>())
         {
             rtc.SetDateTime(RtcDateTime((uint32_t)value));
-
-            if (!rtc.LastError())
-                Serial.write("psn_wts\n");
-            else Serial.write("psn_wtf\n");
+            Serial.write(rtc.LastError() ? "psn_wtf\n" : "psn_wts\n");
         } else Serial.write("psn_wtf\n");
     } else Serial.write("psn_wtf\n");
 }

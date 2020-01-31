@@ -280,6 +280,8 @@ void logger_on_message(char* topic, char* payload,
                                 new_session = temp_session;
                                 session_result = RequestResult::Success;
                                 awaiting_session = false;
+
+                                free(message);
                                 return;
                             }
                             else session_result = RequestResult::Fail;
@@ -303,4 +305,6 @@ void logger_on_message(char* topic, char* payload,
 
         awaiting_report = false;
     }
+
+    free(message);
 }

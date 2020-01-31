@@ -1,5 +1,7 @@
 #include <RtcDS3231.h>
 
+#include "helpers/helpers.h"
+
 
 #define SERIAL_TIMEOUT 5 // Number of seconds to wait for serial data at power on
 #define BUFFER_SIZE 127 // Maximum number of reports to store in the buffer
@@ -13,3 +15,4 @@ void loop();
 
 void wake_routine();
 void generate_report(const RtcDateTime&);
+void serialise_report(char*, const report_t&, const session_t&);
