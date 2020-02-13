@@ -34,7 +34,7 @@ void setup()
 
         // Permanently enter serial mode if serial data is received before timeout
         Serial.begin(9600);
-        
+
         bool serial_mode = true;
         delay(1000);
 
@@ -122,6 +122,8 @@ void loop() { }
  */
 void wake_routine()
 {
+    Serial.begin(9600);
+
     // Check if the RTC time is valid (may have lost battery power)
     if (!is_rtc_time_valid(rtc)) esp_deep_sleep_start();
     
@@ -199,23 +201,23 @@ void serialise_report(char* report_out, const report_t& report,
     const session_t& session)
 {
     int length = 0;
-    length += sprintf(report_out, "{ \"session\": %d", session.session);
+    length += sprintf(report_out, "{\"session\":%d", session.session);
 
     char formatted_time[32] = { '\0' };
     format_time(formatted_time, RtcDateTime(report.time));
-    length += sprintf(report_out + length, ", \"time\": \"%s\"", formatted_time);
+    length += sprintf(report_out + length, ",\"time\":\"%s\"", formatted_time);
 
     if (report.airt != -99)
-        length += sprintf(report_out + length, ", \"airt\": %.1f", report.airt);
-    else length += sprintf(report_out + length, ", \"airt\": null");
+        length += sprintf(report_out + length, ",\"airt\":%.1f", report.airt);
+    else length += sprintf(report_out + length, ",\"airt\":null");
 
     if (report.relh != -99)
-        length += sprintf(report_out + length, ", \"relh\": %.1f", report.relh);
-    else length += sprintf(report_out + length, ", \"relh\": null");
+        length += sprintf(report_out + length, ",\"relh\":%.1f", report.relh);
+    else length += sprintf(report_out + length, ",\"relh\":null");
 
     if (report.batv != -99)
-        length += sprintf(report_out + length, ", \"batv\": %.2f", report.batv);
-    else length += sprintf(report_out + length, ", \"batv\": null");
+        length += sprintf(report_out + length, ",\"batv\":%.2f", report.batv);
+    else length += sprintf(report_out + length, ",\"batv\":null");
 
-    strcat(report_out + length, " }");
+    strcat(report_out + length, "}");
 }

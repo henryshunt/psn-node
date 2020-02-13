@@ -1,4 +1,5 @@
 #include <Wire.h>
+#include <nvs_flash.h>
 #include <Preferences.h>
 
 #include <RtcDS3231.h>
@@ -38,16 +39,16 @@ void load_mac_address()
 bool load_configuration(bool* valid_out)
 {
     Preferences preferences;
-    if (!preferences.begin("psn", true)) return false;
-    
+    if (!preferences.begin("psn", false)) return false;
+
     strcpy(network_name, preferences.getString("nnam").c_str());
     is_enterprise_network = preferences.getBool("nent");
     strcpy(network_username, preferences.getString("nunm").c_str());
     strcpy(network_password, preferences.getString("npwd").c_str());
     strcpy(logger_address, preferences.getString("ladr").c_str());
-    logger_port = preferences.getUShort("lprt");
-    network_timeout = preferences.getUChar("tnet");
-    logger_timeout = preferences.getUChar("tlog");
+    logger_port = preferences.getUShort("lprt", 1883);
+    network_timeout = preferences.getUChar("tnet", 6);
+    logger_timeout = preferences.getUChar("tlog", 6);
     preferences.end();
 
     bool valid = true;
