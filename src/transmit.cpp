@@ -130,7 +130,7 @@ bool logger_subscribe()
 }
 
 /*
-    Sends session request, waits for response or times out (blocking)
+    Transmits session request, waits for response or times out (blocking)
  */
 RequestResult logger_get_session(session_t* session_out)
 {
@@ -162,9 +162,9 @@ RequestResult logger_get_session(session_t* session_out)
 }
 
 /*
-    Sends report, waits for response or times out (blocking)
+    Transmits report, waits for response or times out (blocking)
  */
-RequestResult logger_send_report(const char* report)
+RequestResult logger_transmit_report(const char* report)
 {
     char reports_topic[64] = { '\0' };
     sprintf(reports_topic, "nodes/%s/reports/%u", mac_address, ++publish_id);
@@ -230,66 +230,73 @@ void logger_on_message(char* topic, char* payload,
         else
         {
             StaticJsonDocument<JSON_OBJECT_SIZE(3)> document;
-            DeserializationError error = deserializeJson(document, message);
+            DeserializationError json_status = deserializeJson(document, message);
             
-            if (!error)
+            if (json_status != DeserializationError::Ok)
             {
-                JsonObject json_object = document.as<JsonObject>();
+                session_result = RequestResult::Fail;
+                awaiting_session = false;
 
-                bool field_error = false;
-                session_t temp_session;
+                free(message);
+                return;
+            }
 
-                if (json_object.containsKey("session"))
+
+            JsonObject json_object = document.as<JsonObject>();
+
+            bool field_error = false;
+            session_t temp_session;
+
+            if (json_object.containsKey("session"))
+            {
+                JsonVariant value = json_object.getMember("session");
+
+                if (value.is<int32_t>())
+                    temp_session.session = value;
+                else field_error = true;
+            } else field_error = true;
+
+            if (json_object.containsKey("interval"))
+            {
+                JsonVariant value = json_object.getMember("interval");
+                
+                if (value.is<int8_t>())
+                    temp_session.interval = value;
+                else field_error = true;
+            } else field_error = true;
+
+            if (json_object.containsKey("batch_size"))
+            {
+                JsonVariant value = json_object.getMember("batch_size");
+                
+                if (value.is<int8_t>())
+                    temp_session.batch_size = value;
+                else field_error = true;
+            } else field_error = true;
+
+
+            if (!field_error)
+            {
+                int allowed_intervals[] = { 1, 2, 5, 10, 15, 20, 30 };
+                for (int i = 0; i < 6; i++)
                 {
-                    JsonVariant value = json_object.getMember("session");
-
-                    if (value.is<int32_t>())
-                        temp_session.session = value;
-                    else field_error = true;
-                } else field_error = true;
-
-                if (json_object.containsKey("interval"))
-                {
-                    JsonVariant value = json_object.getMember("interval");
-                    
-                    if (value.is<int8_t>())
-                        temp_session.interval = value;
-                    else field_error = true;
-                } else field_error = true;
-
-                if (json_object.containsKey("batch_size"))
-                {
-                    JsonVariant value = json_object.getMember("batch_size");
-                    
-                    if (value.is<int8_t>())
-                        temp_session.batch_size = value;
-                    else field_error = true;
-                } else field_error = true;
-
-
-                if (!field_error)
-                {
-                    int allowed_intervals[] = { 1, 2, 5, 10, 15, 20, 30 };
-                    for (int i = 0; i < 6; i++)
+                    // The interval is valid, so perform the rest of the checks
+                    if (allowed_intervals[i] == temp_session.interval)
                     {
-                        // The interval is valid, so perform the rest of the checks
-                        if (allowed_intervals[i] == temp_session.interval)
+                        if (temp_session.session >= 0 && temp_session.batch_size > 0)
                         {
-                            if (temp_session.session >= 0 && temp_session.batch_size > 0)
-                            {
-                                new_session = temp_session;
-                                session_result = RequestResult::Success;
-                                awaiting_session = false;
+                            new_session = temp_session;
+                            session_result = RequestResult::Success;
+                            awaiting_session = false;
 
-                                free(message);
-                                return;
-                            }
-                            else session_result = RequestResult::Fail;
+                            free(message);
+                            return;
                         }
+                        else session_result = RequestResult::Fail;
                     }
+                }
 
-                    session_result = RequestResult::Fail;
-                } else session_result = RequestResult::Fail;
+                session_result = RequestResult::Fail;
             } else session_result = RequestResult::Fail;
         }
 

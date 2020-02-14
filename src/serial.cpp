@@ -82,9 +82,9 @@ void process_wc_command(const char* command)
 
     // Deserialise the JSON string containing the new configuration
     StaticJsonDocument<JSON_OBJECT_SIZE(32)> document;
-    DeserializationError error = deserializeJson(document, command + 7);
+    DeserializationError json_status = deserializeJson(document, command + 7);
     
-    if (error)
+    if (json_status != DeserializationError::Ok)
     {
         Serial.write("psn_wcf\n");
         return;
@@ -258,9 +258,9 @@ void process_wt_command(const char* command)
 
     // Deserialise the JSON string containing the new configuration
     StaticJsonDocument<JSON_OBJECT_SIZE(32)> document;
-    DeserializationError error = deserializeJson(document, command + 7);
+    DeserializationError json_status = deserializeJson(document, command + 7);
     
-    if (error)
+    if (json_status != DeserializationError::Ok)
     {
         Serial.write("psn_wtf\n");
         return;

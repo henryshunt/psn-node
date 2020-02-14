@@ -12,7 +12,7 @@
 RTC_DATA_ATTR bool cold_boot = true;
 RTC_DATA_ATTR session_t session;
 RTC_DATA_ATTR report_buffer_t buffer;
-RTC_DATA_ATTR report_t reports[BUFFER_SIZE];
+RTC_DATA_ATTR report_t reports[BUFFER_CAPACITY + 1];
 
 
 /*
@@ -92,7 +92,7 @@ void setup()
         if (session_status == RequestResult::NoSession) esp_deep_sleep_start();
 
 
-        buffer.size = BUFFER_SIZE;
+        buffer.size = BUFFER_CAPACITY + 1;
         rtc.SetSquareWavePin(DS3231SquareWavePin_ModeAlarmOne);
 
         RtcDateTime first_alarm = rtc.GetDateTime();
@@ -118,7 +118,7 @@ void loop() { }
 
 
 /*
-    Generates a report, sets an alarm for the next report, sends all reports, sleeps
+    Generates a report, sets alarm for the next report, transmits all reports, sleeps
  */
 void wake_routine()
 {
@@ -135,30 +135,30 @@ void wake_routine()
 
     generate_report(now);
 
-    // Send reports in the buffer if there's a big enough number of them
-    if (buffer.count >= session.batch_size && network_connect() && logger_connect()
+    // Transmit reports in the buffer if there's a big enough number of them
+    if (buffer.count() >= session.batch_size && network_connect() && logger_connect()
         && logger_subscribe())
     {
-        // Only send if there's enough time before the next alarm
+        // Only transmit if there's enough time before the next alarm
         while (!buffer.is_empty() && next_alarm - rtc.GetDateTime() >= logger_timeout
             + ALARM_SET_THRESHOLD)
         {
-            report_t report = buffer.pop_rear(reports);
+            report_t report = buffer.peek_rear(reports);
+
             char report_json[128] = { '\0' };
             serialise_report(report_json, report, session);
             Serial.println(report_json);
 
-            // Send the report. Add it back to the buffer if the send failed
-            RequestResult report_status = logger_send_report(report_json);
-            if (report_status == RequestResult::Fail)
+            // Transmit the report
+            RequestResult report_status = logger_transmit_report(report_json);
+            if (report_status != RequestResult::Fail)
             {
-                buffer.push_rear(reports, report);
-                break;
-            }
-            
-            // Currently active session for this node has ended
-            else if (report_status == RequestResult::NoSession)
-                esp_deep_sleep_start();
+                buffer.pop_rear(reports);
+
+                // Currently active session for this node has ended
+                if (report_status == RequestResult::NoSession)
+                    esp_deep_sleep_start();
+            } else break;
         }
     }
 
