@@ -247,12 +247,12 @@ void logger_on_message(char* topic, char* payload,
             bool field_error = false;
             session_t temp_session;
 
-            if (json_object.containsKey("session"))
+            if (json_object.containsKey("session_id"))
             {
-                JsonVariant value = json_object.getMember("session");
+                JsonVariant value = json_object.getMember("session_id");
 
                 if (value.is<int32_t>())
-                    temp_session.session = value;
+                    temp_session.session_id = value;
                 else field_error = true;
             } else field_error = true;
 
@@ -283,7 +283,7 @@ void logger_on_message(char* topic, char* payload,
                     // The interval is valid, so perform the rest of the checks
                     if (allowed_intervals[i] == temp_session.interval)
                     {
-                        if (temp_session.session >= 0 && temp_session.batch_size > 0)
+                        if (temp_session.session_id >= 0 && temp_session.batch_size > 0)
                         {
                             new_session = temp_session;
                             session_result = RequestResult::Success;

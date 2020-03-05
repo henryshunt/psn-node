@@ -201,7 +201,7 @@ void serialise_report(char* report_out, const report_t& report,
     const session_t& session)
 {
     int length = 0;
-    length += sprintf(report_out, "{\"session\":%d", session.session);
+    length += sprintf(report_out, "{\"session_id\":%d", session.session_id);
 
     char formatted_time[32] = { '\0' };
     format_time(formatted_time, RtcDateTime(report.time));
