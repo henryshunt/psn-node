@@ -251,7 +251,7 @@ void logger_on_message(char* topic, char* payload,
             {
                 JsonVariant value = json_object.getMember("session_id");
 
-                if (value.is<int32_t>())
+                if (value.is<uint16_t>())
                     temp_session.session_id = value;
                 else field_error = true;
             } else field_error = true;
@@ -260,7 +260,7 @@ void logger_on_message(char* topic, char* payload,
             {
                 JsonVariant value = json_object.getMember("interval");
                 
-                if (value.is<int8_t>())
+                if (value.is<uint8_t>())
                     temp_session.interval = value;
                 else field_error = true;
             } else field_error = true;
@@ -269,7 +269,7 @@ void logger_on_message(char* topic, char* payload,
             {
                 JsonVariant value = json_object.getMember("batch_size");
                 
-                if (value.is<int8_t>())
+                if (value.is<uint8_t>())
                     temp_session.batch_size = value;
                 else field_error = true;
             } else field_error = true;
@@ -283,7 +283,7 @@ void logger_on_message(char* topic, char* payload,
                     // The interval is valid, so perform the rest of the checks
                     if (allowed_intervals[i] == temp_session.interval)
                     {
-                        if (temp_session.session_id >= 0 && temp_session.batch_size > 0)
+                        if (temp_session.batch_size >= 1 && temp_session.batch_size <= 208)
                         {
                             new_session = temp_session;
                             session_result = RequestResult::Success;
@@ -291,8 +291,7 @@ void logger_on_message(char* topic, char* payload,
 
                             free(message);
                             return;
-                        }
-                        else session_result = RequestResult::Fail;
+                        } else session_result = RequestResult::Fail;
                     }
                 }
 

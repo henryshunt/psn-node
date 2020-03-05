@@ -10,9 +10,9 @@ enum RequestResult { Success, Fail, NoSession };
 
 struct session_t
 {
-    int32_t session_id;
-    int8_t interval;
-    int8_t batch_size;
+    uint16_t session_id;
+    uint8_t interval;
+    uint8_t batch_size;
 };
 
 struct report_t
