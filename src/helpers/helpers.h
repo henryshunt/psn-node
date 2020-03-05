@@ -6,6 +6,16 @@
 #ifndef HELPERS_H
 #define HELPERS_H
 
+#define SERIAL_TIMEOUT 5 // Number of seconds to wait for serial data at power on
+#define ALLOWED_INTERVALS { 1, 2, 5, 10, 15, 20, 30 } // The allowed intervals between
+// reports in minutes
+#define ALLOWED_INTERVALS_LEN 7 // Number of elements in ALLOWED_INTERVALS
+#define BUFFER_CAPACITY 208 // Maximum number of reports to store in the buffer
+#define RTC_SQUARE_WAVE_PIN GPIO_NUM_35 // What GPIO pin is the RTC SQW pin connected to?
+#define ALARM_SET_THRESHOLD 2 // Number of seconds of sleep to guarantee before an alarm
+// fires (precaution to ensure the device sleeps properly before the alarm triggers)
+
+
 enum RequestResult { Success, Fail, NoSession };
 
 struct session_t

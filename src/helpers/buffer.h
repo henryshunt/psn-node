@@ -8,28 +8,26 @@
 
 /*
     Limited implementation of a circular buffer, designed for use in the ESP32's sleep
-    memory. Elements are added to the front and removed fron the rear. Front indicates
-    the index that the next added element will occupy.
+    memory. Elements are added to the front and removed fron the rear. Front points to
+    the index that the next added element will occupy, while rear points to the index
+    that currently holds the final element.
 
-    Before usage, set the size (maximum elements is one less than the size) and prepare
-    an array of the same size to store the elements in.
+    Before usage, prepare an array of size BUFFER_CAPACITY to store the elements in.
  */
 struct report_buffer_t
 {
-private:
+private:    
     int front = 0;
     int rear = 0;
 
 public:
-    int size = 1;
-
     const int count()
     {
         if (front == rear)
             return 0;
         else if (rear < front)
             return front - rear;
-        else return (size - rear) + front;
+        else return ((BUFFER_CAPACITY + 1) - rear) + front;
     }
 
     const bool is_empty()
@@ -39,7 +37,7 @@ public:
 
     const bool is_full()
     {
-        return count() == size - 1 ? true : false;
+        return count() == (BUFFER_CAPACITY + 1) - 1 ? true : false;
     }
 
 
@@ -51,16 +49,16 @@ public:
         elements[front].batv = report.batv;
 
         bool full = is_full();
-        front = (front + 1) % size;
+        front = (front + 1) % (BUFFER_CAPACITY + 1);
 
         if (full)
-            rear = (rear + 1) % size;
+            rear = (rear + 1) % (BUFFER_CAPACITY + 1);
     }
 
     report_t pop_rear(report_t* elements)
     {
         report_t report = elements[rear];
-        rear = (rear + 1) % size;
+        rear = (rear + 1) % (BUFFER_CAPACITY + 1);
         return report;
     }
 

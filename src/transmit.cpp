@@ -277,8 +277,8 @@ void logger_on_message(char* topic, char* payload,
 
             if (!field_error)
             {
-                int allowed_intervals[] = { 1, 2, 5, 10, 15, 20, 30 };
-                for (int i = 0; i < 6; i++)
+                int allowed_intervals[] = ALLOWED_INTERVALS;
+                for (int i = 0; i < ALLOWED_INTERVALS_LEN - 1; i++)
                 {
                     // The interval is valid, so perform the rest of the checks
                     if (allowed_intervals[i] == temp_session.interval)

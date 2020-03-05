@@ -92,7 +92,6 @@ void setup()
         if (session_status == RequestResult::NoSession) esp_deep_sleep_start();
 
 
-        buffer.size = BUFFER_CAPACITY + 1;
         rtc.SetSquareWavePin(DS3231SquareWavePin_ModeAlarmOne);
 
         RtcDateTime first_alarm = rtc.GetDateTime();
