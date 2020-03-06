@@ -1,11 +1,15 @@
+/*
+    Deals with connecting to the WiFi network, and connecting to and communicating
+    with the logging server.
+ */
+
 #include <WiFi.h>
 #include <esp_wpa2.h>
-
 #include <AsyncMqttClient.h>
 #include <ArduinoJson.h>
 
 #include "transmit.h"
-#include "globals.h"
+#include "helpers/globals.h"
 #include "helpers/helpers.h"
 
 
@@ -23,11 +27,12 @@ AsyncMqttClient logger;
 
 
 /*
-    Connects to WiFi network or times out (blocking)
+    Connects to the WiFi network or times out (blocking). Returns a boolean
+    indicating success or failure.
  */
 bool network_connect()
 {
-    // Configure for enterprise network if required
+    // Configure for enterprise WiFi network if required
     if (is_enterprise_network)
     {
         WiFi.mode(WIFI_STA);
@@ -42,7 +47,7 @@ bool network_connect()
     WiFi.begin(network_name, network_password);
     delay(1000);
 
-    // Check connection status and timeout after set time
+    // Check connection status and time out after set time
     int checks = 1;
     while (WiFi.status() != WL_CONNECTED)
     {
@@ -55,7 +60,8 @@ bool network_connect()
 }
 
 /*
-    Checks whether the device is currently connected to the network
+    Returns a boolean indicating whether the device is currently connected to the
+    network or not.
  */
 bool is_network_connected()
 {
@@ -64,7 +70,8 @@ bool is_network_connected()
 
 
 /*
-    Connects to MQTT broker or times out (blocking)
+    Connects to the logging server or times out (blocking). Returns a boolean
+    indicating success or failure.
  */
 bool logger_connect()
 {
@@ -76,7 +83,7 @@ bool logger_connect()
     logger.connect();
     delay(1000);
 
-    // Check connection status and timeout after set time
+    // Check connection status and time out after set time
     int checks = 1;
     while (!logger.connected())
     {
@@ -89,7 +96,8 @@ bool logger_connect()
 }
 
 /*
-    Checks whether the device is currently connected to the logging server
+    Returns a boolean indicating whether the device is currently connected to
+    the logging server or not.
  */
 bool is_logger_connected()
 {
@@ -98,7 +106,9 @@ bool is_logger_connected()
 
 
 /*
-    Subscribes to inbound topic, waits for response or times out (blocking)
+    Subscribes to the inbound topic on the logging server, then waits for
+    response or times out (blocking). Returns a boolean indicating success or
+    failure.
  */
 bool logger_subscribe()
 {
@@ -115,7 +125,7 @@ bool logger_subscribe()
     } else return false;
     delay(1000);
 
-    // Check result status and timeout after set time
+    // Check result status and time out after set time
     int checks = 1;
     while (awaiting_subscribe)
     {
@@ -130,7 +140,10 @@ bool logger_subscribe()
 }
 
 /*
-    Transmits session request, waits for response or times out (blocking)
+    Requests the active session for this sensor node, then waits for response or
+    times out (blocking). Returns an enum indicating the status.
+
+    - session_out: the session to fill out upon request success
  */
 RequestResult logger_get_session(session_t* session_out)
 {
@@ -145,7 +158,7 @@ RequestResult logger_get_session(session_t* session_out)
     else awaiting_session = true;
     delay(1000);
 
-    // Check result status and timeout after set time
+    // Check result status and time out after set time
     int checks = 1;
     while (awaiting_session)
     {
@@ -162,7 +175,10 @@ RequestResult logger_get_session(session_t* session_out)
 }
 
 /*
-    Transmits report, waits for response or times out (blocking)
+    Transmits a report, then waits for a response or times out (blocking). Returns
+    an enum indicating the status.
+
+    - report: the report to transmit in JSON format
  */
 RequestResult logger_transmit_report(const char* report)
 {
@@ -177,7 +193,7 @@ RequestResult logger_transmit_report(const char* report)
     else return RequestResult::Fail;
     delay(1000);
 
-    // Check result status and timeout after set time
+    // Check result status and time out after set time
     int checks = 1;
     while (awaiting_report)
     {
@@ -193,7 +209,8 @@ RequestResult logger_transmit_report(const char* report)
 
 
 /*
-    Called when a subscription acknowledgement is received from the logging server
+    Callback for when a subscription acknowledgement is received from the logging
+    server (see Async MQTT Client library).
  */
 void logger_on_subscribe(uint16_t packet_id, uint8_t qos)
 {
@@ -202,7 +219,8 @@ void logger_on_subscribe(uint16_t packet_id, uint8_t qos)
 }
 
 /*
-    Called when message is received from the logging server
+    Callback for when message is received from the logging server (see Async MQTT
+    client library).
  */
 void logger_on_message(char* topic, char* payload,
     AsyncMqttClientMessageProperties properties, size_t length, size_t index,
@@ -229,6 +247,7 @@ void logger_on_message(char* topic, char* payload,
 
         else
         {
+            // Deserialise the JSON containing the session
             StaticJsonDocument<JSON_OBJECT_SIZE(3)> document;
             DeserializationError json_status = deserializeJson(document, message);
             
@@ -247,6 +266,7 @@ void logger_on_message(char* topic, char* payload,
             bool field_error = false;
             session_t temp_session;
 
+            // Check that all values are present in the JSON
             if (json_object.containsKey("session_id"))
             {
                 JsonVariant value = json_object.getMember("session_id");
@@ -275,15 +295,17 @@ void logger_on_message(char* topic, char* payload,
             } else field_error = true;
 
 
+            // Validate the values
             if (!field_error)
             {
                 int allowed_intervals[] = ALLOWED_INTERVALS;
                 for (int i = 0; i < ALLOWED_INTERVALS_LEN - 1; i++)
                 {
-                    // The interval is valid, so perform the rest of the checks
+                    // If the interval is valid then perform the rest of the checks
                     if (allowed_intervals[i] == temp_session.interval)
                     {
-                        if (temp_session.batch_size >= 1 && temp_session.batch_size <= 208)
+                        if (temp_session.batch_size >= 1 &&
+                            temp_session.batch_size <= BUFFER_CAPACITY)
                         {
                             new_session = temp_session;
                             session_result = RequestResult::Success;

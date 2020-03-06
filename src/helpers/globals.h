@@ -1,7 +1,6 @@
 #include <stdint.h>
 #include <esp_attr.h>
 #include <Wire.h>
-
 #include <RtcDS3231.h>
 
 
@@ -22,6 +21,5 @@ extern RTC_DATA_ATTR uint8_t logger_timeout;
 extern RtcDS3231<TwoWire> rtc;
 
 
-void load_mac_address();
 bool load_configuration(bool*);
 #endif

@@ -1,13 +1,19 @@
-#include <Preferences.h>
+/*
+    Deals with communication between the device and another computer over the
+    serial connection.
+ */
 
+#include <Preferences.h>
 #include <ArduinoJson.h>
 
 #include "serial.h"
-#include "globals.h"
+#include "helpers/globals.h"
 #include "helpers/helpers.h"
 
+
 /*
-    Sits in a continuous loop and responds to commands sent over serial
+    Sits in an infinite loop and responds to any commands sent over the serial
+    connection.
  */
 void serial_routine()
 {
@@ -45,7 +51,7 @@ void serial_routine()
 
 
 /*
-    Processes and responds to the ping command
+    Processes and responds to the ping command.
  */
 void process_pn_command()
 {
@@ -53,7 +59,8 @@ void process_pn_command()
 }
 
 /*
-    Processes and responds to the read configuration command
+    Processes and responds to the read configuration command. Sends the device
+    configuration stored in non-volatile storage, in JSON format.
  */
 void process_rc_command()
 {
@@ -69,7 +76,10 @@ void process_rc_command()
 }
 
 /*
-    Processes and responds to the write configuration command
+    Processes and responds to the write configuration command. Modifies the
+    configuration stored in non-volatile storage.
+
+    - command: a JSON string containing new values for all configuration keys
  */
 void process_wc_command(const char* command)
 {
@@ -80,7 +90,7 @@ void process_wc_command(const char* command)
         return;
     }
 
-    // Deserialise the JSON string containing the new configuration
+    // Deserialise the JSON containing the new configuration
     StaticJsonDocument<JSON_OBJECT_SIZE(32)> document;
     DeserializationError json_status = deserializeJson(document, command + 7);
     
@@ -103,6 +113,7 @@ void process_wc_command(const char* command)
     uint8_t new_logger_timeout = 0;
 
 
+    // Check that all values are present in the JSON
     if (json_object.containsKey("nnam"))
     {
         JsonVariant value = json_object.getMember("nnam");
@@ -186,7 +197,7 @@ void process_wc_command(const char* command)
         return;
     }
 
-    // Check validity of new configuration (some 0 length checks already done above)
+    // Validate the values (some 0 length checks already done above)
     if (new_is_enterprise_network && (strlen(new_network_username) == 0 ||
         strlen(new_network_password) == 0)) field_error = false;
     if (new_logger_port < 1024) field_error = false;
@@ -222,7 +233,8 @@ void process_wc_command(const char* command)
 }
 
 /*
-    Processes and responds to the read time command
+    Processes and responds to the read time command. Sends the device time in
+    JSON format.
  */
 void process_rt_command()
 {
@@ -245,7 +257,10 @@ void process_rt_command()
 }
 
 /*
-    Processes and responds to the write time command
+    Processes and responds to the write time command. Sets the device RTC time.
+
+    - command: a JSON string containing a new time value in the form of the
+    number of seconds since January 1st 1970
  */
 void process_wt_command(const char* command)
 {
@@ -256,7 +271,7 @@ void process_wt_command(const char* command)
         return;
     }
 
-    // Deserialise the JSON string containing the new configuration
+    // Deserialise the JSON containing the new time
     StaticJsonDocument<JSON_OBJECT_SIZE(32)> document;
     DeserializationError json_status = deserializeJson(document, command + 7);
     

@@ -1,7 +1,11 @@
+/*
+    Holds various variables used accross the codebase, most importantly the
+    device configuration.
+ */
+
 #include <Wire.h>
 #include <nvs_flash.h>
 #include <Preferences.h>
-
 #include <RtcDS3231.h>
 
 #include "globals.h"
@@ -22,19 +26,12 @@ RtcDS3231<TwoWire> rtc(Wire);
 
 
 /*
-    Loads the MAC address of the device into a global variable
- */
-void load_mac_address()
-{
-    uint8_t mac_out[6];
-    esp_efuse_mac_get_default(mac_out);
+    Loads the device configuration from non-volatile storage into the global
+    variables and checks the validity of the values. Returns a boolean indicating
+    the success or failure of reading the NVS.
 
-    sprintf(mac_address, "%x:%x:%x:%x:%x:%x", mac_out[0], mac_out[1], mac_out[2],
-        mac_out[3], mac_out[4], mac_out[5]);
-}
-
-/*
-    Loads configuration from NVS into global variables and checks value validity
+    - valid_out: a boolean that will be set to indicate whether the loaded
+    configuration is valid or not
  */
 bool load_configuration(bool* valid_out)
 {
