@@ -3,6 +3,7 @@
     generating and transmitting reports. Core program flow is here.
  */
 
+#include <stdint.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME680.h>
 

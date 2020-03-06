@@ -3,7 +3,6 @@
     definitions of various structs and global configurable values.
  */
 
-#include <Wire.h>
 #include <RtcDS3231.h>
 
 #include "helpers.h"

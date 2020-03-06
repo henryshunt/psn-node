@@ -7,9 +7,7 @@
     in. This must be passed into any functions that require the elements.
  */
 
-#include "RtcDS3231.h"
 #include "helpers.h"
-
 
 #ifndef BUFFER_H
 #define BUFFER_H

@@ -1,6 +1,4 @@
-#include <Wire.h>
 #include <RtcDS3231.h>
-
 
 #ifndef HELPERS_H
 #define HELPERS_H
