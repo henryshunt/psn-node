@@ -15,113 +15,125 @@
 #include "transmit.h"
 
 
-RTC_DATA_ATTR bool cold_boot = true;
+RTC_DATA_ATTR int boot_mode = 0;
+RTC_DATA_ATTR int session_check_count = 0;
 RTC_DATA_ATTR session_t session;
 RTC_DATA_ATTR report_buffer_t buffer;
 RTC_DATA_ATTR report_t reports[BUFFER_CAPACITY + 1];
 
 
 /*
-    Performs initialisation, retrieves the active session for the device and sets
-    an alarm to trigger the first report.
+    Performs initialisation, manages the retrieval of the active session for this
+    sensor node (repeats on error) and calls the reporting routine.
  */
 void setup()
 {
     rtc.Begin();
-
-    if (cold_boot)
+    if (boot_mode == 0) // Booted from power off
     {
-        // Retrieve device MAC address for uniquely identifying this sensor node
         uint8_t mac_temp[6];
         esp_efuse_mac_get_default(mac_temp);
 
         sprintf(mac_address, "%x:%x:%x:%x:%x:%x", mac_temp[0], mac_temp[1],
             mac_temp[2], mac_temp[3], mac_temp[4], mac_temp[5]);
 
-        // Load device configuration from non-volatile storage
         bool config_valid;
         if (!load_configuration(&config_valid)) esp_deep_sleep_start();
 
+        // Permanently enter serial mode if received serial data
+        try_serial_mode();
 
-        // Permanently enter serial mode if serial data is received before timeout
-        Serial.begin(9600);
-
-        bool serial_mode = true;
-        delay(1000);
-
-        int checks = 1;
-        while (!Serial.available())
-        {
-            if (checks++ >= SERIAL_TIMEOUT)
-            {
-                serial_mode = false;
-                break;
-            } else delay(1000);
-        }
-
-        if (serial_mode) serial_routine();
-        Serial.end();
-
-
-        // Check configuration is valid
         if (!config_valid) esp_deep_sleep_start();
-
-        // Check RTC time is valid (may not be set or may have lost battery power)
         if (!is_rtc_time_valid()) esp_deep_sleep_start();
-
-
-        // Connect to network and logging server, and reboot on failure. NOTE: I
-        // cannot fully guarantee these functions will work properly when called
-        // multiple times. The only way to ensure the system is not left in an
-        // unrecoverable state is to perform a full restart.
-        if (!network_connect() || !logger_connect()) esp_restart();
-
-        // Subscribe to the inbound topic on the logging server
-        while (true)
-        {
-            if (!logger_subscribe())
-            {
-                if (!is_network_connected() || !is_logger_connected())
-                    esp_restart();
-            } else break;
-        }
-
-        // Request the active session for this sensor node
-        RequestResult session_status;
-
-        while (true)
-        {
-            session_status = logger_get_session(&session);
-            if (session_status == RequestResult::Fail)
-            {
-                if (!is_network_connected() || !is_logger_connected())
-                    esp_restart();
-            } else break;
-        }
-
-        // Don't continue if there's no session for this sensor node
-        if (session_status == RequestResult::NoSession) esp_deep_sleep_start();
-
-
         rtc.SetSquareWavePin(DS3231SquareWavePin_ModeAlarmOne);
 
-        RtcDateTime first_alarm = rtc.GetDateTime();
-        first_alarm += (60 - first_alarm.Second()); // Move to start of next minute
-        first_alarm = round_up_multiple(first_alarm, session.interval * 60); // Round
-        // up to next multiple of the interval (e.g. a 5 minute interval rounds to
-        // the next minute ending in 0 or 5)
+        RtcDateTime alarm_time = rtc.GetDateTime() + 60;
+        set_rtc_alarm(alarm_time);
 
-        // Advance to next interval if currently too close to first available interval
-        if (first_alarm - rtc.GetDateTime() <= ALARM_SET_THRESHOLD)
-            first_alarm += session.interval * 60;
-
-        // Set alarm to trigger the first report, then go into deep sleep
-        set_rtc_alarm(first_alarm);
-        esp_sleep_enable_ext0_wakeup(RTC_SQUARE_WAVE_PIN, 0);
-        cold_boot = false;
-        esp_deep_sleep_start();
+        if (!connect_and_get_session())
+        {
+            boot_mode = 1;
+            esp_sleep_enable_ext0_wakeup(RTC_SQUARE_WAVE_PIN, 0);
+            esp_deep_sleep_start();
+        } else set_first_alarm();
     }
-    else wake_routine();
+    else if (boot_mode == 1) // Woken from sleep but has no session
+    {
+        if (!is_rtc_time_valid()) esp_deep_sleep_start();
+
+        session_check_count++;
+        RtcDateTime alarm_time = rtc.GetDateTime() + 60;
+        set_rtc_alarm(alarm_time);
+
+        if (!connect_and_get_session())
+        {
+            if (session_check_count == SESSION_CHECKS) esp_deep_sleep_start();
+
+            esp_sleep_enable_ext0_wakeup(RTC_SQUARE_WAVE_PIN, 0);
+            esp_deep_sleep_start();
+        } else set_first_alarm();
+    }
+    else reporting_routine(); // Woken from sleep and must report
+}
+
+/*
+    Waits a certain amount of time for data to be received on the serial port
+    and if it is, goes into an infinite loop to respond to serial commands.
+ */
+void try_serial_mode()
+{
+    Serial.begin(9600);
+    bool serial_mode = true;
+    delay(1000);
+
+    int checks = 1;
+    while (!Serial.available())
+    {
+        if (checks++ >= SERIAL_TIMEOUT)
+        {
+            serial_mode = false;
+            break;
+        } else delay(1000);
+    }
+
+    if (serial_mode) serial_routine();
+    Serial.end();
+}
+
+/*
+    Attempts to connect to the WiFi network and logging server, then attempts to
+    get the active sesion for this sensor node. Returns a boolean indicating
+    success or failure.
+ */
+bool connect_and_get_session()
+{
+    if (!network_connect() || !logger_connect()) return false;
+    if (!logger_subscribe()) return false;
+    if (logger_get_session(&session) == RequestResult::Fail) return false;
+    return true;
+}
+
+/*
+    Switches to boot mode 2, sets an alarm to trigger the first report, then goes
+    to sleep.
+ */
+void set_first_alarm()
+{
+    boot_mode = 2;
+
+    RtcDateTime first_alarm = rtc.GetDateTime();
+    first_alarm += (60 - first_alarm.Second()); // Move to start of next minute
+    first_alarm = round_up_multiple(first_alarm, session.interval * 60); // Round
+    // up to next multiple of the interval (e.g. a 5 minute interval rounds to
+    // the next minute ending in a 0 or 5)
+
+    // Advance to next interval if currently too close to first available interval
+    if (first_alarm - rtc.GetDateTime() <= ALARM_SET_THRESHOLD)
+        first_alarm += session.interval * 60;
+
+    set_rtc_alarm(first_alarm);
+    esp_sleep_enable_ext0_wakeup(RTC_SQUARE_WAVE_PIN, 0);
+    esp_deep_sleep_start();
 }
 
 void loop() { }
@@ -131,18 +143,14 @@ void loop() { }
     Sets alarm to trigger the next report, generates a report, transmits all
     reports in the buffer, then goes to sleep.
  */
-void wake_routine()
+void reporting_routine()
 {
-    Serial.begin(9600);
-
-    // Check if the RTC time is valid (may have lost battery power)
     if (!is_rtc_time_valid()) esp_deep_sleep_start();
     
     // Set alarm to trigger the next report
     RtcDateTime now = rtc.GetDateTime();
     RtcDateTime next_alarm = now + (session.interval * 60);
     set_rtc_alarm(next_alarm);
-
 
     generate_report(now);
 
@@ -158,7 +166,6 @@ void wake_routine()
             char report_json[128] = { '\0' };
             serialise_report(report_json, report);
 
-            // Transmit the report
             RequestResult report_status = logger_transmit_report(report_json);
             if (report_status != RequestResult::Fail)
             {
@@ -171,7 +178,6 @@ void wake_routine()
         }
     }
 
-    // Go into deep sleep
     esp_sleep_enable_ext0_wakeup(RTC_SQUARE_WAVE_PIN, 0);
     esp_deep_sleep_start();
 }

@@ -29,6 +29,10 @@ AsyncMqttClient logger;
 /*
     Connects to the WiFi network or times out (blocking). Returns a boolean
     indicating success or failure.
+
+    NOTE: I cannot guarantee that this function will work properly when called
+    multiple times. The only way to ensure the system is not left in an
+    unrecoverable state is to perform a restart before calling this again.
  */
 bool network_connect()
 {
@@ -60,8 +64,8 @@ bool network_connect()
 }
 
 /*
-    Returns a boolean indicating whether the device is currently connected to the
-    network or not.
+    Returns a boolean indicating whether the device is currently connected to
+    the network or not.
  */
 bool is_network_connected()
 {
@@ -72,6 +76,10 @@ bool is_network_connected()
 /*
     Connects to the logging server or times out (blocking). Returns a boolean
     indicating success or failure.
+
+    NOTE: I cannot guarantee that this function will work properly when called
+    multiple times. The only way to ensure the system is not left in an
+    unrecoverable state is to perform a restart before calling this again.
  */
 bool logger_connect()
 {

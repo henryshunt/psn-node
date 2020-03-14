@@ -4,6 +4,7 @@
 #define HELPERS_H
 
 #define SERIAL_TIMEOUT 5 // Number of seconds to wait for serial data at power on
+#define SESSION_CHECKS 15 // Number of times to attempt to get the active session
 #define ALLOWED_INTERVALS { 1, 2, 5, 10, 15, 20, 30 } // The allowed intervals
 // between reports in minutes
 #define ALLOWED_INTERVALS_LEN 7 // Number of elements in ALLOWED_INTERVALS
