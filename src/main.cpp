@@ -67,9 +67,8 @@ void setup()
 
         if (!connect_and_get_session())
         {
-            if (session_check_count == SESSION_CHECKS) esp_deep_sleep_start();
-
-            esp_sleep_enable_ext0_wakeup(RTC_SQUARE_WAVE_PIN, 0);
+            if (session_check_count < SESSION_CHECKS)
+                esp_sleep_enable_ext0_wakeup(RTC_SQUARE_WAVE_PIN, 0);
             esp_deep_sleep_start();
         } else set_first_alarm();
     }
@@ -103,13 +102,18 @@ void try_serial_mode()
 /*
     Attempts to connect to the WiFi network and logging server, then attempts to
     get the active sesion for this sensor node. Returns a boolean indicating
-    success or failure.
+    success or failure, and fails if no session was gotten.
  */
 bool connect_and_get_session()
 {
     if (!network_connect() || !logger_connect()) return false;
     if (!logger_subscribe()) return false;
-    if (logger_get_session(&session) == RequestResult::Fail) return false;
+
+    RequestResult session_status = logger_get_session(&session);
+    if (session_status == RequestResult::Fail ||
+        session_status == RequestResult::NoSession)
+    { return false; }
+
     return true;
 }
 
@@ -195,6 +199,7 @@ void generate_report(const RtcDateTime& time)
     Adafruit_BME680 bme680;
     if (bme680.begin(0x76))
     {
+        bme680.setGasHeater(0, 0);
         bme680.setTemperatureOversampling(BME680_OS_8X);
         bme680.setHumidityOversampling(BME680_OS_2X);
 
