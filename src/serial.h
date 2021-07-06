@@ -1,3 +1,4 @@
+void trySerialMode();
 void serial_routine();
 
 void process_pn_command();

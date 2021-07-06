@@ -1,201 +1,241 @@
-/*
-    Deals with device startup as well as the main logging routine responsible for
-    generating and transmitting reports. Core program flow is here.
- */
-
-#include <stdint.h>
-#include <Adafruit_Sensor.h>
-#include <Adafruit_BME680.h>
-
 #include "main.h"
-#include "helpers/globals.h"
 #include "helpers/helpers.h"
 #include "helpers/buffer.h"
 #include "serial.h"
 #include "transmit.h"
+#include <Preferences.h>
+#include <nvs_flash.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BME680.h>
+#include <stdint.h>
 
 
-RTC_DATA_ATTR int boot_mode = 0;
-RTC_DATA_ATTR int session_check_count = 0;
-RTC_DATA_ATTR session_t session;
-RTC_DATA_ATTR report_buffer_t buffer;
-RTC_DATA_ATTR report_t reports[BUFFER_CAPACITY + 1];
+char cfgNetworkName[32] = { '\0' };
+bool cfgIsEnterprise;
+char cfgNetworkUsername[64] = { '\0' };
+char cfgNetworkPassword[64] = { '\0' };
+char cfgServerAddress[32] = { '\0' };
+uint16_t cfgServerPort;
+
+char macAddress[18] = { '\0' };
+RtcDS3231<TwoWire> ds3231(Wire);
+
+/**
+ * The mode the device is or should be in when it boots up or wakes from deep sleep.
+ */
+RTC_DATA_ATTR static int bootMode = 0;
+
+/**
+ * The number of attempts made to get the instructions for this sensor node.
+ */
+RTC_DATA_ATTR static int instructionsCheckCount = 0;
+
+/**
+ * The instructions for this sensor node.
+ */
+RTC_DATA_ATTR static instructions_t instructions;
+
+/**
+ * A circular buffer for storing observations for transmission.
+ */
+RTC_DATA_ATTR static buffer_t buffer;
+
+/**
+ * The array of observations maintained by the buffer.
+ */
+RTC_DATA_ATTR static observation_t observations[BUFFER_CAPACITY + 1];
 
 
-/*
-    Performs initialisation, manages the retrieval of the active session for this
-    sensor node (repeats on error) and calls the reporting routine.
+static bool loadConfiguration(bool&);
+static void setFirstObservationAlarm();
+static void observe();
+static void generateObservation(const RtcDateTime&);
+static void serialiseObservation(const observation_t&, char* const);
+static void setRtcAlarm(const RtcDateTime&);
+
+
+/**
+ * Performs initialisation, manages retrieval of the instructions (retrying on error) for
+ * this sensor node, and calls the routine to generate and transmit an observation.
  */
 void setup()
 {
-    rtc.Begin();
-    if (boot_mode == 0) // Booted from power off
+    uint8_t macTemp[6];
+    esp_efuse_mac_get_default(macTemp);
+    
+    sprintf(macAddress, "%02x:%02x:%02x:%02x:%02x:%02x", macTemp[0],
+        macTemp[1], macTemp[2], macTemp[3], macTemp[4], macTemp[5]);
+
+    bool configValid;
+    if (!loadConfiguration(configValid))
+        esp_deep_sleep_start();
+
+    if (bootMode == 0) // Booted from power off
     {
-        uint8_t mac_temp[6];
-        esp_efuse_mac_get_default(mac_temp);
+        // Permanently enter serial mode if any serial data is received
+        trySerialMode();
+    }
 
-        sprintf(mac_address, "%x:%x:%x:%x:%x:%x", mac_temp[0], mac_temp[1],
-            mac_temp[2], mac_temp[3], mac_temp[4], mac_temp[5]);
+    ds3231.Begin();
+    ds3231.SetSquareWavePin(DS3231SquareWavePin_ModeAlarmOne);
 
-        bool config_valid;
-        if (!load_configuration(&config_valid)) esp_deep_sleep_start();
+    if (!configValid || !ds3231.IsDateTimeValid())
+        esp_deep_sleep_start();
+    
 
-        // Permanently enter serial mode if received serial data
-        try_serial_mode();
-
-        if (!config_valid) esp_deep_sleep_start();
-        if (!is_rtc_time_valid()) esp_deep_sleep_start();
-        rtc.SetSquareWavePin(DS3231SquareWavePin_ModeAlarmOne);
-
-        RtcDateTime alarm_time = rtc.GetDateTime() + 60;
-        set_rtc_alarm(alarm_time);
-
-        if (!connect_and_get_session())
+    if (bootMode == 0) // Booted from power off
+    {
+        if (!networkConnect() || !serverConnect() || !serverSubscribe() ||
+            !serverInstructions(instructions) || instructions.isNull)
         {
-            boot_mode = 1;
+            bootMode = 1;
+            setRtcAlarm(ds3231.GetDateTime() + 60);
             esp_sleep_enable_ext0_wakeup(RTC_SQUARE_WAVE_PIN, 0);
             esp_deep_sleep_start();
-        } else set_first_alarm();
-    }
-    else if (boot_mode == 1) // Woken from sleep but has no session
-    {
-        if (!is_rtc_time_valid()) esp_deep_sleep_start();
-
-        session_check_count++;
-        RtcDateTime alarm_time = rtc.GetDateTime() + 60;
-        set_rtc_alarm(alarm_time);
-
-        if (!connect_and_get_session())
+        }
+        else
         {
-            if (session_check_count < SESSION_CHECKS)
+            bootMode = 2;
+            setFirstObservationAlarm();
+        }
+    }
+    else if (bootMode == 1) // Woken from sleep but has no instructions
+    {
+        instructionsCheckCount++;
+
+        if (!networkConnect() || !serverConnect() || !serverSubscribe() ||
+            !serverInstructions(instructions) || instructions.isNull)
+        {
+            if (instructionsCheckCount < INSTRUCTIONS_CHECKS)
+            {
+                setRtcAlarm(ds3231.GetDateTime() + 60);
                 esp_sleep_enable_ext0_wakeup(RTC_SQUARE_WAVE_PIN, 0);
+            }
+
             esp_deep_sleep_start();
-        } else set_first_alarm();
-    }
-    else reporting_routine(); // Woken from sleep and must report
-}
-
-/*
-    Waits a certain amount of time for data to be received on the serial port
-    and if it is, goes into an infinite loop to respond to serial commands.
- */
-void try_serial_mode()
-{
-    Serial.begin(9600);
-    bool serial_mode = true;
-    delay(1000);
-
-    int checks = 1;
-    while (!Serial.available())
-    {
-        if (checks++ >= SERIAL_TIMEOUT)
+        }
+        else
         {
-            serial_mode = false;
-            break;
-        } else delay(1000);
+            bootMode = 2;
+            setFirstObservationAlarm();
+        }
     }
-
-    if (serial_mode) serial_routine();
-    Serial.end();
-}
-
-/*
-    Attempts to connect to the WiFi network and logging server, then attempts to
-    get the active sesion for this sensor node. Returns a boolean indicating
-    success or failure, and fails if no session was gotten.
- */
-bool connect_and_get_session()
-{
-    if (!network_connect() || !logger_connect()) return false;
-    if (!logger_subscribe()) return false;
-
-    RequestResult session_status = logger_get_session(&session);
-    if (session_status == RequestResult::Fail ||
-        session_status == RequestResult::NoSession)
-    { return false; }
-
-    return true;
-}
-
-/*
-    Switches to boot mode 2, sets an alarm to trigger the first report, then goes
-    to sleep.
- */
-void set_first_alarm()
-{
-    boot_mode = 2;
-
-    RtcDateTime first_alarm = rtc.GetDateTime();
-    first_alarm += (60 - first_alarm.Second()); // Move to start of next minute
-    first_alarm = round_up_multiple(first_alarm, session.interval * 60); // Round
-    // up to next multiple of the interval (e.g. a 5 minute interval rounds to
-    // the next minute ending in a 0 or 5)
-
-    // Advance to next interval if currently too close to first available interval
-    if (first_alarm - rtc.GetDateTime() <= ALARM_SET_THRESHOLD)
-        first_alarm += session.interval * 60;
-
-    set_rtc_alarm(first_alarm);
-    esp_sleep_enable_ext0_wakeup(RTC_SQUARE_WAVE_PIN, 0);
-    esp_deep_sleep_start();
+    else observe(); // Woken from sleep and has instructions
 }
 
 void loop() { }
 
-
-/*
-    Sets alarm to trigger the next report, generates a report, transmits all
-    reports in the buffer, then goes to sleep.
+/**
+ * Loads configuration data from the device's non-volatile storage into the global
+ * variables prefixed with cfg, and checks the validity of the values.
+ * @param validOut Will be set to indicate whether the loaded configuration data is valid.
+ * @return An indication of success or failure of reading the configuration data.
  */
-void reporting_routine()
+static bool loadConfiguration(bool& validOut)
 {
-    if (!is_rtc_time_valid()) esp_deep_sleep_start();
-    
-    // Set alarm to trigger the next report
-    RtcDateTime now = rtc.GetDateTime();
-    RtcDateTime next_alarm = now + (session.interval * 60);
-    set_rtc_alarm(next_alarm);
+    Preferences preferences;
+    if (!preferences.begin("psn", false))
+        return false;
 
-    generate_report(now);
+    strcpy(cfgNetworkName, preferences.getString("nnam").c_str());
+    cfgIsEnterprise = preferences.getBool("nent");
+    strcpy(cfgNetworkUsername, preferences.getString("nunm").c_str());
+    strcpy(cfgNetworkPassword, preferences.getString("npwd").c_str());
+    strcpy(cfgServerAddress, preferences.getString("ladr").c_str());
+    cfgServerPort = preferences.getUShort("lprt", 1883);
+    preferences.end();
 
-    // Transmit all reports in the report buffer if there's a enough of them
-    if (buffer.count() >= session.batch_size && network_connect() && logger_connect()
-        && logger_subscribe())
+    bool isValid = true;
+
+    // Check validity of loaded configuration
+    if (strlen(cfgNetworkName) == 0 || (cfgIsEnterprise &&
+        (strlen(cfgNetworkUsername) == 0 || strlen(cfgNetworkPassword)) == 0) ||
+        strlen(cfgServerAddress) == 0 || cfgServerPort < 1024)
     {
-        // Only transmit if there's enough time before the next alarm
-        while (!buffer.is_empty() && next_alarm - rtc.GetDateTime() >= logger_timeout
-            + ALARM_SET_THRESHOLD)
+        isValid = false;
+    }
+
+    validOut = isValid;
+    return true;
+}
+
+/**
+ * Sets an alarm to trigger the first observation, then goes to sleep.
+ */
+static void setFirstObservationAlarm()
+{
+    RtcDateTime time = ds3231.GetDateTime();
+    time += 60 - time.Second(); // Move to start of next minute
+
+    // Round up to next multiple of the interval (e.g. a 5 minute interval means
+    // the next minute ending in a 0 or 5)
+    time = roundUpMultiple(time, instructions.interval * 60);
+
+    // Advance to next interval if currently too close to first available interval
+    if (time - ds3231.GetDateTime() <= ALARM_THRESHOLD)
+        time += instructions.interval * 60;
+
+    setRtcAlarm(time);
+    esp_sleep_enable_ext0_wakeup(RTC_SQUARE_WAVE_PIN, 0);
+    esp_deep_sleep_start();
+}
+
+/**
+ * Sets an alarm to trigger the next observation, generates an observation, transmits
+ * observations stored in the buffer, then goes to sleep.
+ */
+static void observe()
+{
+    RtcDateTime now = ds3231.GetDateTime();
+    RtcDateTime nextAlarm = now + (instructions.interval * 60);
+    setRtcAlarm(nextAlarm);
+
+    generateObservation(now);
+
+    if (buffer.count() < instructions.batchSize ||
+        !networkConnect() || !serverConnect() || !serverSubscribe())
+    {
+        esp_sleep_enable_ext0_wakeup(RTC_SQUARE_WAVE_PIN, 0);
+        esp_deep_sleep_start();
+    }
+
+    // Transmit observations stored in the buffer as long as there's
+    // enough time before the next observation alarm
+    while (!buffer.isEmpty() && nextAlarm - ds3231.GetDateTime() >=
+        NETWORK_TIMEOUT + ALARM_THRESHOLD)
+    {
+        observation_t* observation = buffer.peekRear(observations);
+
+        char json[97] = { '\0' };
+        serialiseObservation(*observation, json);
+
+        instructions_t newInstructions;
+        if (serverObservation(json, newInstructions))
         {
-            report_t report = buffer.peek_rear(reports);
-            char report_json[128] = { '\0' };
-            serialise_report(report_json, report);
+            buffer.popRear(observations);
 
-            RequestResult report_status = logger_transmit_report(report_json);
-            if (report_status != RequestResult::Fail)
-            {
-                buffer.pop_rear(reports);
-
-                // The active session for this sensor node has ended
-                if (report_status == RequestResult::NoSession)
-                    esp_deep_sleep_start();
-            } else break;
+            // If null then this sensor node has no more work to do
+            if (!newInstructions.isNull)
+                instructions = newInstructions;
+            else esp_deep_sleep_start();
         }
+        else break;
     }
 
     esp_sleep_enable_ext0_wakeup(RTC_SQUARE_WAVE_PIN, 0);
     esp_deep_sleep_start();
 }
 
-/*
-    Samples the sensors, creates a report and pushes it onto the report buffer.
-
-    - time: the time of the report
+/**
+ * Samples the sensors, produces an observation and pushes it to the observation buffer.
+ * @param time The time of the observation.
  */
-void generate_report(const RtcDateTime& time)
+static void generateObservation(const RtcDateTime& time)
 {
-    report_t report = { (uint32_t)time, -99, -99, -99 };
+    observation_t observation =
+        { (uint32_t)time, -99, -99, -99 };
 
-    // Sample temperature and humidity
+    // Sample temperature and relative humidity
     Adafruit_BME680 bme680;
     if (bme680.begin(0x76))
     {
@@ -205,70 +245,56 @@ void generate_report(const RtcDateTime& time)
 
         if (bme680.performReading())
         {
-            report.airt = bme680.temperature;
-            report.relh = bme680.humidity;
+            observation.temperature = bme680.temperature;
+            observation.relativeHumidity = bme680.humidity;
         }
     }
 
     // Sample battery voltage
-    // report.batv = ...
+    // observation.batteryVoltage = ...
 
-    buffer.push_front(reports, report);
+    buffer.pushFront(observations, observation);
 }
 
-/*
-    Serialises a report into a JSON string ready for transmission to the logging
-    server.
-
-    - report_out: destination string
-    - report: the report to serialise
+/**
+ * Serialises an observation into a JSON string ready for transmission to the server.
+ * @param obs The observation to serialise.
+ * @param jsonOut The destination for the serialised observation JSON.
  */
-void serialise_report(char* report_out, const report_t& report)
+static void serialiseObservation(const observation_t& obs, char* const jsonOut)
 {
     int length = 0;
-    length += sprintf(report_out, "{\"session_id\":%d", session.session_id);
+    length += sprintf(jsonOut, "{\"streamId\":%d", instructions.streamId);
 
-    char formatted_time[32] = { '\0' };
-    format_time(formatted_time, RtcDateTime(report.time));
-    length += sprintf(report_out + length, ",\"time\":\"%s\"", formatted_time);
+    char time[20] = { '\0' };
+    formatTime(RtcDateTime(obs.time), time);
 
-    if (report.airt != -99)
-        length += sprintf(report_out + length, ",\"airt\":%.1f", report.airt);
-    else length += sprintf(report_out + length, ",\"airt\":null");
+    length += sprintf(jsonOut + length, ",\"time\":\"%s\"", time);
 
-    if (report.relh != -99)
-        length += sprintf(report_out + length, ",\"relh\":%.1f", report.relh);
-    else length += sprintf(report_out + length, ",\"relh\":null");
+    if (obs.temperature != -99)
+        length += sprintf(jsonOut + length, ",\"temp\":%.1f", obs.temperature);
+    else length += sprintf(jsonOut + length, ",\"temp\":null");
 
-    if (report.batv != -99)
-        length += sprintf(report_out + length, ",\"batv\":%.2f", report.batv);
-    else length += sprintf(report_out + length, ",\"batv\":null");
+    if (obs.relativeHumidity != -99)
+        length += sprintf(jsonOut + length, ",\"relHum\":%.1f", obs.relativeHumidity);
+    else length += sprintf(jsonOut + length, ",\"relHum\":null");
 
-    strcat(report_out + length, "}");
+    if (obs.batteryVoltage != -99)
+        length += sprintf(jsonOut + length, ",\"batVolt\":%.2f", obs.batteryVoltage);
+    else length += sprintf(jsonOut + length, ",\"batVolt\":null");
+
+    strcat(jsonOut + length, "}");
 }
 
-
-/*
-    Returns a boolean indicating whether the RTC holds a valid timestamp or not
-    (may not be valid e.g. if the time was never set or onboard battery power
-    was lost).
-*/
-bool is_rtc_time_valid()
-{
-    bool rtc_valid = rtc.IsDateTimeValid();
-    return rtc.LastError() ? false : rtc_valid;
-}
-
-/*
-    Sets the onboard alarm on the RTC.
-
-    - time: the time that the alarm should trigger at
+/**
+ * Sets an alarm on the RTC.
+ * @param time The time that the alarm should trigger at.
  */
-void set_rtc_alarm(const RtcDateTime& time)
+static void setRtcAlarm(const RtcDateTime& time)
 {
-    DS3231AlarmOne alarm(time.Day(), time.Hour(), time.Minute(), time.Second(),
-        DS3231AlarmOneControl_MinutesSecondsMatch);
+    DS3231AlarmOne alarm(time.Day(), time.Hour(), time.Minute(),
+        time.Second(), DS3231AlarmOneControl_MinutesSecondsMatch);
 
-    rtc.SetAlarmOne(alarm);
-    rtc.LatchAlarmsTriggeredFlags();
+    ds3231.SetAlarmOne(alarm);
+    ds3231.LatchAlarmsTriggeredFlags();
 }

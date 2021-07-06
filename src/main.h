@@ -1,18 +1,48 @@
+#ifndef MAIN_H
+#define MAIN_H
+
 #include <RtcDS3231.h>
+#include <Wire.h>
 
-#include "helpers/helpers.h"
+/**
+ * The name of the WiFi network to connect to.
+ */
+extern char cfgNetworkName[32];
 
+/**
+ * Is the WiFi network an enterprise network? An enterprise network requires credentials
+ * with a username and password.
+ */
+extern bool cfgIsEnterprise;
 
-void setup();
-void try_serial_mode();
-bool connect_and_get_session();
-void set_first_alarm();
-void loop();
+/**
+ * The username to connect to the WiFi network with, if it is an enterprise network.
+ */
+extern char cfgNetworkUsername[64];
 
-void reporting_routine();
-void generate_report(const RtcDateTime&);
-void serialise_report(char*, const report_t&);
+/**
+ * The password to connect to the WiFi network with.
+ */
+extern char cfgNetworkPassword[64];
 
+/**
+ * The address of the MQTT server to connect to.
+ */
+extern char cfgServerAddress[32];
 
-bool is_rtc_time_valid();
-void set_rtc_alarm(const RtcDateTime&);
+/**
+ * The port to connect to the MQTT server through.
+ */
+extern uint16_t cfgServerPort;
+
+/**
+ * The device's MAC address.
+ */
+extern char macAddress[18];
+
+/**
+ * The device's real-time clock.
+ */
+extern RtcDS3231<TwoWire> ds3231;
+
+#endif

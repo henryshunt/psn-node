@@ -1,61 +1,78 @@
-/*
-    Deals with connecting to the WiFi network, and connecting to and communicating
-    with the logging server.
+/**
+ * Contains functions for connecting to the WiFi network, connecting to the server and
+ * communicating with the server.
  */
 
+#include "transmit.h"
+#include "helpers/helpers.h"
+#include "main.h"
 #include <WiFi.h>
 #include <esp_wpa2.h>
 #include <AsyncMqttClient.h>
 #include <ArduinoJson.h>
 
-#include "transmit.h"
-#include "helpers/globals.h"
-#include "helpers/helpers.h"
 
-
-bool awaiting_subscribe = false;
-uint16_t subscribe_id;
-
-uint16_t publish_id = -1;
-bool awaiting_session = false;
-RequestResult session_result;
-session_t new_session;
-bool awaiting_report = false;
-RequestResult report_result;
-
-AsyncMqttClient logger;
-
-
-/*
-    Connects to the WiFi network or times out (blocking). Returns a boolean
-    indicating success or failure.
-
-    NOTE: I cannot guarantee that this function will work properly when called
-    multiple times. The only way to ensure the system is not left in an
-    unrecoverable state is to perform a restart before calling this again.
+/**
+ * The MQTT server.
  */
-bool network_connect()
+static AsyncMqttClient server;
+
+/**
+ * Stores which server-related asynchronous action is currently being waited on.
+ */
+static ServerAction awaiting = ServerAction::None;
+
+/**
+ * When subscribing to an MQTT topic on the server, stores the ID of the packet that was
+ * sent.
+ */
+static uint16_t subscribeId;
+
+/**
+ * When sending a message to the server, stores the ID of the message.
+ */
+static RTC_DATA_ATTR uint8_t messageId = 0;
+
+/**
+ * When sending a message to the server, indicates whether there was an error.
+ */
+static bool messageError = false;
+
+/**
+ * When sending a message to the server that returns instructions, stores the returned
+ * instructions.
+ */
+static instructions_t tempInstructions;
+
+
+static void onMqttSubscribe(uint16_t, uint8_t);
+static void onMqttMessage(char*, char*, AsyncMqttClientMessageProperties,
+    size_t, size_t, size_t);
+static bool parseInstructions(const char* const, instructions_t&);
+
+
+bool networkConnect()
 {
-    // Configure for enterprise WiFi network if required
-    if (is_enterprise_network)
+    if (cfgIsEnterprise)
     {
         WiFi.mode(WIFI_STA);
+        
         esp_wifi_sta_wpa2_ent_set_username(
-            (uint8_t *)network_username, strlen(network_username));
+            (uint8_t *)cfgNetworkUsername, strlen(cfgNetworkUsername));
         esp_wifi_sta_wpa2_ent_set_password(
-            (uint8_t *)network_password, strlen(network_password));
+            (uint8_t *)cfgNetworkPassword, strlen(cfgNetworkPassword));
+
         esp_wpa2_config_t config = WPA2_CONFIG_INIT_DEFAULT();
         esp_wifi_sta_wpa2_ent_enable(&config);
     }
 
-    WiFi.begin(network_name, network_password);
+    WiFi.begin(cfgNetworkName, cfgNetworkPassword);
     delay(1000);
 
-    // Check connection status and time out after set time
     int checks = 1;
     while (WiFi.status() != WL_CONNECTED)
     {
-        if (checks++ >= network_timeout)
+        if (checks++ >= NETWORK_TIMEOUT)
             return false;
         else delay(1000);
     }
@@ -63,39 +80,22 @@ bool network_connect()
     return true;
 }
 
-/*
-    Returns a boolean indicating whether the device is currently connected to
-    the network or not.
- */
-bool is_network_connected()
+bool serverConnect()
 {
-    return WiFi.status() == WL_CONNECTED;
-}
+    if (WiFi.status() != WL_CONNECTED)
+        return false;
 
+    server.onSubscribe(onMqttSubscribe);
+    server.onMessage(onMqttMessage);
+    server.setServer(cfgServerAddress, cfgServerPort);
 
-/*
-    Connects to the logging server or times out (blocking). Returns a boolean
-    indicating success or failure.
-
-    NOTE: I cannot guarantee that this function will work properly when called
-    multiple times. The only way to ensure the system is not left in an
-    unrecoverable state is to perform a restart before calling this again.
- */
-bool logger_connect()
-{
-    if (WiFi.status() != WL_CONNECTED) return false;
-
-    logger.onSubscribe(logger_on_subscribe);
-    logger.onMessage(logger_on_message);
-    logger.setServer(logger_address, logger_port);
-    logger.connect();
+    server.connect();
     delay(1000);
 
-    // Check connection status and time out after set time
     int checks = 1;
-    while (!logger.connected())
+    while (!server.connected())
     {
-        if (checks++ >= logger_timeout)
+        if (checks++ >= NETWORK_TIMEOUT)
             return false;
         else delay(1000);
     }
@@ -103,244 +103,214 @@ bool logger_connect()
     return true;
 }
 
-/*
-    Returns a boolean indicating whether the device is currently connected to
-    the logging server or not.
- */
-bool is_logger_connected()
+bool serverSubscribe()
 {
-    return logger.connected();
-}
+    char topic[36] = { '\0' };
+    sprintf(topic, "psn/nodes/%s/inbound", macAddress);
 
+    subscribeId = server.subscribe(topic, 0);
 
-/*
-    Subscribes to the inbound topic on the logging server, then waits for
-    response or times out (blocking). Returns a boolean indicating success or
-    failure.
- */
-bool logger_subscribe()
-{
-    char inbound_topic[64] = { '\0' };
-    sprintf(inbound_topic, "nodes/%s/inbound/#", mac_address);
+    if (subscribeId)
+        awaiting = ServerAction::Subscribe;
+    else return false;
 
-    uint16_t packet_id = logger.subscribe(inbound_topic, 0);
-
-    // Check if successfully sent message
-    if (packet_id)
-    {
-        subscribe_id = packet_id;
-        awaiting_subscribe = true;
-    } else return false;
     delay(1000);
 
-    // Check result status and time out after set time
     int checks = 1;
-    while (awaiting_subscribe)
+    while (awaiting == ServerAction::Subscribe)
     {
-        if (checks++ >= logger_timeout)
+        if (checks++ >= NETWORK_TIMEOUT)
         {
-            awaiting_subscribe = false;
+            awaiting = ServerAction::None;
             return false;
-        } else delay(1000);
+        }
+        else delay(1000);
     }
 
     return true;
 }
 
-/*
-    Requests the active session for this sensor node, then waits for response or
-    times out (blocking). Returns an enum indicating the status.
-
-    - session_out: the session to fill out upon request success
- */
-RequestResult logger_get_session(session_t* session_out)
+/**
+ * Callback for when a subscription acknowledgement is received from the MQTT server.
+*/
+static void onMqttSubscribe(uint16_t packetId, uint8_t)
 {
-    char outbound_topic[64] = { '\0' };
-    sprintf(outbound_topic, "nodes/%s/outbound/%u", mac_address, ++publish_id);
+    if (awaiting == ServerAction::Subscribe && packetId == subscribeId)
+        awaiting = ServerAction::None;
+}
 
-    uint16_t packet_id = logger.publish(outbound_topic, 0, false, "get_session");
+bool serverInstructions(instructions_t& instrucOut)
+{
+    char topic[37] = { '\0' };
+    sprintf(topic, "psn/nodes/%s/outbound", macAddress);
 
-    // Check if successfully sent message
-    if (!packet_id)
-        return RequestResult::Fail;
-    else awaiting_session = true;
+    char message[17] = { '\0' };
+    sprintf(message, "%d INSTRUCTIONS", ++messageId);
+
+    if (server.publish(topic, 0, false, message))
+    {
+        messageError = false;
+        awaiting = ServerAction::Instructions;
+    }
+    else return false;
+
     delay(1000);
 
-    // Check result status and time out after set time
     int checks = 1;
-    while (awaiting_session)
+    while (awaiting == ServerAction::Instructions)
     {
-        if (checks++ >= logger_timeout)
+        if (checks++ >= NETWORK_TIMEOUT)
         {
-            awaiting_session = false;
-            return RequestResult::Fail;
-        } else delay(1000);
+            awaiting = ServerAction::None;
+            return false;
+        }
+        else delay(1000);
     }
 
-    if (session_result == RequestResult::Success)
-        (*session_out) = new_session;
-    return session_result;
+    if (!messageError)
+        instrucOut = tempInstructions;
+
+    return !messageError;
 }
 
-/*
-    Transmits a report, then waits for a response or times out (blocking). Returns
-    an enum indicating the status.
-
-    - report: the report to transmit in JSON format
- */
-RequestResult logger_transmit_report(const char* report)
+bool serverObservation(const char* const obsJson, instructions_t& instrucOut)
 {
-    char reports_topic[64] = { '\0' };
-    sprintf(reports_topic, "nodes/%s/reports/%u", mac_address, ++publish_id);
+    char topic[37] = { '\0' };
+    sprintf(topic, "psn/nodes/%s/outbound", macAddress);
 
-    uint16_t packet_id = logger.publish(reports_topic, 0, false, report);
+    char message[113] = { '\0' };
+    sprintf(message, "%d OBSERVATION ", ++messageId);
+    strcat(message, obsJson);
 
-    // Check if successfully sent message
-    if (packet_id)
-        awaiting_report = true;
-    else return RequestResult::Fail;
+    if (server.publish(topic, 0, false, message))
+    {
+        messageError = false;
+        awaiting = ServerAction::Observation;
+    }
+    else return false;
+
     delay(1000);
 
-    // Check result status and time out after set time
     int checks = 1;
-    while (awaiting_report)
+    while (awaiting == ServerAction::Observation)
     {
-        if (checks++ >= logger_timeout)
+        if (checks++ >= NETWORK_TIMEOUT)
         {
-            awaiting_report = false;
-            return RequestResult::Fail;
-        } else delay(1000);
+            awaiting = ServerAction::None;
+            return false;
+        }
+        else delay(1000);
     }
 
-    return report_result;
+    if (!messageError)
+        instrucOut = tempInstructions;
+
+    return !messageError;
 }
 
-
-/*
-    Callback for when a subscription acknowledgement is received from the logging
-    server (see Async MQTT Client library).
+/**
+ * Callback for when a message is received from the MQTT server.
  */
-void logger_on_subscribe(uint16_t packet_id, uint8_t qos)
+static void onMqttMessage(char*, char* payload,
+    AsyncMqttClientMessageProperties, size_t length, size_t, size_t)
 {
-    if (awaiting_subscribe && packet_id == subscribe_id)
-        awaiting_subscribe = false;
-}
+    if (awaiting == ServerAction::None)
+        return;
 
-/*
-    Callback for when message is received from the logging server (see Async MQTT
-    client library).
- */
-void logger_on_message(char* topic, char* payload,
-    AsyncMqttClientMessageProperties properties, size_t length, size_t index,
-    size_t total)
-{
-    // Get ID of received message from the final topic element
-    uint16_t message_id = (uint16_t)strtoul(
-        topic + std::string(topic).find_last_of('/') + 1, NULL, 10);
-
-    if (message_id != publish_id) return;
-
-    // Copy message into memory to remove unwanted trailing characters
+    // Need to remove unwanted trailing characters
     char* message = (char*)calloc(length + 1, sizeof(char));
     memcpy(message, payload, length);
 
+    char* spacePtr = strchr(message, ' ');
+    int spaceIndex = spacePtr == NULL ? -1 : spacePtr - message;
 
-    // Process the received message
-    if (awaiting_session)
+    if (spaceIndex <= 0 || spaceIndex == length - 1 ||
+        message[spaceIndex + 1] == ' ' || message[length - 1] == ' ')
     {
-        if (strcmp(message, "no_session") == 0)
-            session_result = RequestResult::NoSession;
-        else if (strcmp(message, "error") == 0)
-            session_result = RequestResult::Fail;
-
-        else
-        {
-            // Deserialise the JSON containing the session
-            StaticJsonDocument<JSON_OBJECT_SIZE(3)> document;
-            DeserializationError json_status = deserializeJson(document, message);
-            
-            if (json_status != DeserializationError::Ok)
-            {
-                session_result = RequestResult::Fail;
-                awaiting_session = false;
-
-                free(message);
-                return;
-            }
-
-
-            JsonObject json_object = document.as<JsonObject>();
-
-            bool field_error = false;
-            session_t temp_session;
-
-            // Check that all values are present in the JSON
-            if (json_object.containsKey("session_id"))
-            {
-                JsonVariant value = json_object.getMember("session_id");
-
-                if (value.is<uint16_t>())
-                    temp_session.session_id = value;
-                else field_error = true;
-            } else field_error = true;
-
-            if (json_object.containsKey("interval"))
-            {
-                JsonVariant value = json_object.getMember("interval");
-                
-                if (value.is<uint8_t>())
-                    temp_session.interval = value;
-                else field_error = true;
-            } else field_error = true;
-
-            if (json_object.containsKey("batch_size"))
-            {
-                JsonVariant value = json_object.getMember("batch_size");
-                
-                if (value.is<uint8_t>())
-                    temp_session.batch_size = value;
-                else field_error = true;
-            } else field_error = true;
-
-
-            // Validate the values
-            if (!field_error)
-            {
-                int allowed_intervals[] = ALLOWED_INTERVALS;
-                for (int i = 0; i < ALLOWED_INTERVALS_LEN - 1; i++)
-                {
-                    // If the interval is valid then perform the rest of the checks
-                    if (allowed_intervals[i] == temp_session.interval)
-                    {
-                        if (temp_session.batch_size >= 1 &&
-                            temp_session.batch_size <= BUFFER_CAPACITY)
-                        {
-                            new_session = temp_session;
-                            session_result = RequestResult::Success;
-                            awaiting_session = false;
-
-                            free(message);
-                            return;
-                        } else session_result = RequestResult::Fail;
-                    }
-                }
-
-                session_result = RequestResult::Fail;
-            } else session_result = RequestResult::Fail;
-        }
-
-        awaiting_session = false;
+        return;
     }
-    else if (awaiting_report)
-    {
-        if (strcmp(message, "ok") == 0)
-            report_result = RequestResult::Success;
-        else if (strcmp(message, "no_session") == 0)
-            report_result = RequestResult::NoSession;
-        else report_result = RequestResult::Fail;
 
-        awaiting_report = false;
+    char* endPtr = NULL;
+    unsigned long receivedId = strtoul(message, &endPtr, 10);
+
+    if (endPtr != spacePtr || receivedId > 255 || receivedId != messageId)
+        return;
+
+    if (strncmp(spacePtr + 1, "ERROR", 5) == 0)
+        messageError = true;
+    else
+    {
+        // Both currently supported messages return instructions
+        if (strncmp(spacePtr + 1, "NULL", 4) != 0)
+        {
+            messageError = !parseInstructions(spacePtr + 1, tempInstructions);
+            tempInstructions.isNull = false;
+        }
+        else tempInstructions.isNull = true;
     }
 
     free(message);
+    awaiting = ServerAction::None;
+}
+
+/**
+ * Parses a JSON string representing the instructions for a sensor node.
+ * @param json The JSON string.
+ * @param instrucOut The destination for the parsed instructions.
+ * @return An indication of success or failure.
+ */
+static bool parseInstructions(const char* const json, instructions_t& instrucOut)
+{
+    StaticJsonDocument<JSON_OBJECT_SIZE(5)> document;
+    DeserializationError status = deserializeJson(document, json);
+    
+    if (status != DeserializationError::Ok)
+        return false;
+
+    JsonObject jsonObject = document.as<JsonObject>();
+
+
+    if (jsonObject.containsKey("streamId"))
+    {
+        JsonVariant value = jsonObject.getMember("streamId");
+
+        if (value.is<uint16_t>())
+            instrucOut.streamId = value;
+        else return false;
+    }
+    else return false;
+
+    if (jsonObject.containsKey("interval"))
+    {
+        JsonVariant value = jsonObject.getMember("interval");
+        
+        if (value.is<uint8_t>())
+            instrucOut.interval = value;
+        else return false;
+    }
+    else return false;
+
+    if (jsonObject.containsKey("batchSize"))
+    {
+        JsonVariant value = jsonObject.getMember("batchSize");
+        
+        if (value.is<uint8_t>())
+            instrucOut.batchSize = value;
+        else return false;
+    }
+    else return false;
+
+
+    int allowedIntervals[] = ALLOWED_INTERVALS;
+
+    for (int i = 0; i < ALLOWED_INTERVALS_LEN - 1; i++)
+    {
+        if (allowedIntervals[i] == instrucOut.interval)
+        {
+            return instrucOut.batchSize >= 1 &&
+                instrucOut.batchSize <= BUFFER_CAPACITY;
+        }
+    }
+
+    return false;
 }

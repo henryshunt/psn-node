@@ -1,18 +1,46 @@
-#include <AsyncMqttClient.h>
+/**
+ * Contains functions for connecting to the WiFi network, connecting to the server and
+ * communicating with the server.
+ */
 
 #include "helpers/helpers.h"
 
+/**
+ * Connects to the WiFi network or times out. Note: I cannot guarantee that this function
+ * will work properly when called multiple times. The only way to ensure the system is not
+ * left in an unrecoverable state is to perform a reset before calling it again.
+ * @return An indication of success or failure.
+ */
+bool networkConnect();
 
-bool network_connect();
-bool is_network_connected();
+/**
+ * Connects to the MQTT server or times out. Note: I cannot guarantee that this function
+ * will work properly when called multiple times. The only way to ensure the system is not
+ * left in an unrecoverable state is to perform a reset before calling it again.
+ * @return An indication of success or failure.
+ */
+bool serverConnect();
 
-bool logger_connect();
-bool is_logger_connected();
+/**
+ * Subscribes to the inbound topic for this sensor node on the MQTT server, or times out.
+ * @return An indication of success or failure.
+ */
+bool serverSubscribe();
 
-bool logger_subscribe();
-RequestResult logger_get_session(session_t*);
-RequestResult logger_transmit_report(const char*);
+/**
+ * Requests the instructions for this sensor node or times out.
+ * @param instrucOut The destination for the received instructions. If there are no
+ * instructions available then the isNull attribute is set to true.
+ * @return An indication of success or failure.
+*/
+bool serverInstructions(instructions_t& instrucOut);
 
-void logger_on_subscribe(uint16_t, uint8_t);
-void logger_on_message(char*, char*,
-    AsyncMqttClientMessageProperties, size_t, size_t, size_t);
+/**
+ * Transmits an observation and receives the instructions for this sensor node, or times
+ * out.
+ * @param obsJson A JSON string representing the observation to transmit.
+ * @param instrucOut The destination for the received instructions. If there are no
+ * instructions available then the isNull attribute is set to true.
+ * @return An indication of success or failure.
+*/
+bool serverObservation(const char* const obsJson, instructions_t& instrucOut);

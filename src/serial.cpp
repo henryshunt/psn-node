@@ -7,9 +7,33 @@
 #include <ArduinoJson.h>
 
 #include "serial.h"
-#include "helpers/globals.h"
+#include "main.h"
 #include "helpers/helpers.h"
 
+
+/*
+    Waits a certain amount of time for data to be received on the serial port
+    and if it is, goes into an infinite loop to respond to serial commands.
+ */
+void trySerialMode()
+{
+    //Serial.begin(9600);
+    bool serial_mode = true;
+    delay(1000);
+
+    int checks = 1;
+    while (!Serial.available())
+    {
+        if (checks++ >= SERIAL_TIMEOUT)
+        {
+            serial_mode = false;
+            break;
+        } else delay(1000);
+    }
+
+    if (serial_mode) serial_routine();
+    Serial.end();
+}
 
 /*
     Sits in an infinite loop and responds to any commands sent over the serial
@@ -68,9 +92,9 @@ void process_rc_command()
         "\"%s\",\"npwd\":\"%s\",\"ladr\":\"%s\",\"lprt\":%u,\"tnet\":%u,\"tlog\":%u}\n";
     
     char response[335] = { '\0' };
-    sprintf(response, format, mac_address, network_name,
-        is_enterprise_network ? "true" : "false", network_username, network_password,
-        logger_address, logger_port, network_timeout, logger_timeout);
+    sprintf(response, format, macAddress, cfgNetworkName,
+        cfgIsEnterprise ? "true" : "false", cfgNetworkUsername,
+        cfgNetworkPassword, cfgServerAddress, cfgServerPort);
 
     Serial.write(response);
 }
@@ -109,8 +133,6 @@ void process_wc_command(const char* command)
     char new_network_password[64] = { '\0' };
     char new_logger_address[32] = { '\0' };
     uint16_t new_logger_port = 0;
-    uint8_t new_network_timeout = 0;
-    uint8_t new_logger_timeout = 0;
 
 
     // Check that all values are present in the JSON
@@ -174,22 +196,6 @@ void process_wc_command(const char* command)
         else field_error = true;
     } else field_error = true;
 
-    if (json_object.containsKey("tnet"))
-    {
-        JsonVariant value = json_object.getMember("tnet");
-        if (value.is<uint8_t>())
-            new_network_timeout = value;
-        else field_error = true;
-    } else field_error = true;
-
-    if (json_object.containsKey("tlog"))
-    {
-        JsonVariant value = json_object.getMember("tlog");
-        if (value.is<uint8_t>())
-            new_logger_timeout = value;
-        else field_error = true;
-    } else field_error = true;
-
 
     if (field_error)
     {
@@ -201,8 +207,6 @@ void process_wc_command(const char* command)
     if (new_is_enterprise_network && (strlen(new_network_username) == 0 ||
         strlen(new_network_password) == 0)) field_error = false;
     if (new_logger_port < 1024) field_error = false;
-    if (new_network_timeout < 1 || new_network_timeout > 13) field_error = false;
-    if (new_logger_timeout < 1 || new_logger_timeout > 13) field_error = false;
 
     if (field_error)
     {
@@ -225,8 +229,6 @@ void process_wc_command(const char* command)
     preferences.putString("npwd", new_network_password);
     preferences.putString("ladr", new_logger_address);
     preferences.putUShort("lprt", new_logger_port);
-    preferences.putUChar("tnet", new_network_timeout);
-    preferences.putUChar("tlog", new_logger_timeout);
     preferences.end();
 
     Serial.write("psn_wcs\n");
@@ -238,16 +240,16 @@ void process_wc_command(const char* command)
  */
 void process_rt_command()
 {
-    RtcDateTime now = rtc.GetDateTime();
-    if (!rtc.LastError())
+    RtcDateTime now = ds3231.GetDateTime();
+    if (!ds3231.LastError())
     {
-        bool is_time_valid = rtc.IsDateTimeValid();
-        if (!rtc.LastError())
+        bool is_time_valid = ds3231.IsDateTimeValid();
+        if (!ds3231.LastError())
         {
             const char* format = "psn_rt {\"time\":\"%s\",\"tvld\":%s}\n";
 
             char formatted_time[21] = { '\0' };
-            format_time(formatted_time, now);
+            formatTime(now, formatted_time);
 
             char response[335] = { '\0' };
             sprintf(response, format, formatted_time, is_time_valid ? "true" : "false");
@@ -289,8 +291,8 @@ void process_wt_command(const char* command)
         JsonVariant value = json_object.getMember("time");
         if (value.is<uint32_t>())
         {
-            rtc.SetDateTime(RtcDateTime((uint32_t)value));
-            Serial.write(rtc.LastError() ? "psn_wtf\n" : "psn_wts\n");
+            ds3231.SetDateTime(RtcDateTime((uint32_t)value));
+            Serial.write(ds3231.LastError() ? "psn_wtf\n" : "psn_wts\n");
         } else Serial.write("psn_wtf\n");
     } else Serial.write("psn_wtf\n");
 }

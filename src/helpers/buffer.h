@@ -1,103 +1,67 @@
-/*
-    A limited implementation of a circular buffer, designed specifically for
-    storage in the ESP32's sleep memory. Elements are added to the front and
-    removed fron the rear.
-
-    Before usage, prepare an array of size BUFFER_CAPACITY to store the elements
-    in. This must be passed into any functions that require the elements.
- */
-
-#include "helpers.h"
-
 #ifndef BUFFER_H
 #define BUFFER_H
 
-struct report_buffer_t
+#include "helpers.h"
+
+/**
+ * A limited implementation of a circular buffer, designed specifically for storage in the
+ * ESP32's sleep memory. Elements are added to the front and removed from the rear.
+ * 
+ * Before usage, prepare an array of size BUFFER_CAPACITY to store the elements in. This 
+ * must be passed into any functions that operate on the elements array. Normally the array
+ * would be a member of the class, but the buffer is stored in the sleep memory which has
+ * limited abilities and so the array must be kept separate in order for it to work.
+ */
+class buffer_t
 {
-private:
-    /*
-        Points to the front of the buffer (the index that the next element to be
-        pushed will occupy).
+    /**
+     * The front of the buffer (the index that the next element to be pushed will occupy).
      */
     int front = 0;
 
-    /*
-        Points to the rear of the buffer (the index that currently holds the
-        final element).
+    /**
+     * The rear of the buffer (the index that currently holds the final element).
      */
     int rear = 0;
 
 public:
-    /*
-        Returns the number of elements in the buffer.
+    /**
+     * Returns the number of elements in the buffer.
      */
-    const int count()
-    {
-        if (front == rear)
-            return 0;
-        else if (rear < front)
-            return front - rear;
-        else return ((BUFFER_CAPACITY + 1) - rear) + front;
-    }
+    const int count();
 
-    /*
-        Returns a boolean indicating whether the buffer is empty or not.
+    /**
+     * Returns whether the buffer is empty.
      */
-    const bool is_empty()
-    {
-        return count() == 0 ? true : false;
-    }
+    const bool isEmpty();
 
-    /*
-        Returns a boolean indicating whether the buffer is full or not.
+    /**
+     * Returns whether the buffer is full.
      */
-    const bool is_full()
-    {
-        return count() == (BUFFER_CAPACITY + 1) - 1 ? true : false;
-    }
+    const bool isFull();
 
-
-    /*
-        Pushes a report onto the front of the buffer.
-
-        - elements: array containing the elements of the buffer
-        - report: the report to push onto the buffer
+    /**
+     * Pushes an observation onto the front of the buffer.
+     * @param elements The elements of the buffer.
+     * @param obs The observation to push onto the buffer.
      */
-    void push_front(report_t* elements, const report_t& report)
-    {
-        elements[front].time = report.time;
-        elements[front].airt = report.airt;
-        elements[front].relh = report.relh;
-        elements[front].batv = report.batv;
+    void pushFront(observation_t* const elements, const observation_t& obs);
 
-        bool full = is_full();
-        front = (front + 1) % (BUFFER_CAPACITY + 1);
-
-        if (full)
-            rear = (rear + 1) % (BUFFER_CAPACITY + 1);
-    }
-
-    /*
-        Removes and returns the element at the rear of the buffer.
-
-        - elements: array containing the elements of the buffer
+    /**
+     * Removes and returns the observation at the rear of the buffer.
+     * @param elements The elements of the buffer.
+     * @returns The popped observation, or a null pointer if there is no observation to
+     * pop.
      */
-    report_t pop_rear(report_t* elements)
-    {
-        report_t report = elements[rear];
-        rear = (rear + 1) % (BUFFER_CAPACITY + 1);
-        return report;
-    }
+    observation_t* popRear(observation_t* const elements);
 
-    /*
-        Returns the element at the rear of the buffer.
-
-        - elements: array containing the elements of the buffer
+    /**
+     * Returns the element at the rear of the buffer.
+     * @param elements The elements of the buffer.
+     * @returns The peeked observation, or a null pointer if there is no observation to
+     * peek.
      */
-    const report_t peek_rear(report_t* elements)
-    {
-        return elements[rear];
-    }
+    observation_t* peekRear(observation_t* const elements);
 };
 
 #endif

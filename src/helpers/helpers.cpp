@@ -1,39 +1,31 @@
-/*
-    Various helper functions for use throughout the codebase. See helpers.h for
-    definitions of various structs and global configurable values.
- */
-
-#include <RtcDS3231.h>
-
 #include "helpers.h"
-#include "buffer.h"
 
-
-/*
-    Rounds a number up to a multiple of another number.
-    Taken from https://stackoverflow.com/questions/3407012/c-rounding-up-to-the-nearest-multiple-of-a-number
-
-    - number: the number to round
-    - multiple: a number, the multiple of which to round up to
+/**
+ * Rounds a number up to a multiple of another number.
+ * @param number The number to round.
+ * @param multiple The number will be rounded up to a multiple of this number.
+ * @returns The rounded number.
  */
-int round_up_multiple(int number, int multiple)
+int roundUpMultiple(int number, int multiple)
 {
-    if (multiple == 0) return number;
+    if (multiple == 0)
+        return number;
 
     int remainder = number % multiple;
-    if (remainder == 0) return number;
+
+    if (remainder == 0)
+        return number;
 
     return number + multiple - remainder;
 }
 
-/*
-    Serialises a time into an ISO 8601 formatted string.
-
-    - time_out: destination string
-    - time: the time to serialise
+/**
+ * Formats a time into a string of the format yyyy-MM-ddTHH:mm:ss.
+ * @param time The time to serialise.
+ * @param timeOut The destination for the serialised time.
 */
-void format_time(char* time_out, const RtcDateTime& time)
+void formatTime(const RtcDateTime& time, char* const timeOut)
 {
-    sprintf(time_out, "%04u-%02u-%02uT%02u:%02u:%02uZ", time.Year(),
+    sprintf(timeOut, "%04u-%02u-%02uT%02u:%02u:%02u", time.Year(),
         time.Month(), time.Day(), time.Hour(), time.Minute(), time.Second());
 }
