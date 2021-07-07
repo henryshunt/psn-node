@@ -22,13 +22,13 @@ bool networkConnect();
 bool serverConnect();
 
 /**
- * Subscribes to the inbound topic for this sensor node on the MQTT server, or times out.
+ * Subscribes to the inbound topic for this sensing node on the MQTT server, or times out.
  * @return An indication of success or failure.
  */
 bool serverSubscribe();
 
 /**
- * Requests the instructions for this sensor node or times out.
+ * Requests the instructions for this sensing node or times out.
  * @param instrucOut The destination for the received instructions. If there are no
  * instructions available then the isNull attribute is set to true.
  * @return An indication of success or failure.
@@ -36,7 +36,7 @@ bool serverSubscribe();
 bool serverInstructions(instructions_t& instrucOut);
 
 /**
- * Transmits an observation and receives the instructions for this sensor node, or times
+ * Transmits an observation and receives the instructions for this sensing node, or times
  * out.
  * @param obsJson A JSON string representing the observation to transmit.
  * @param instrucOut The destination for the received instructions. If there are no

@@ -15,7 +15,7 @@
 #define SERIAL_TIMEOUT 5
 
 /**
- * The number of times to repeat attempting to get the instructions for this sensor node.
+ * The number of times to repeat attempting to get the instructions for this sensing node.
  */
 #define INSTRUCTIONS_CHECKS 15
 
@@ -62,7 +62,7 @@ enum ServerAction
     Subscribe,
 
     /**
-     * Requesting instructions for the sensor node.
+     * Requesting instructions for the sensing node.
      */
     Instructions,
 
@@ -74,7 +74,7 @@ enum ServerAction
 
 
 /**
- * Represents information instructing a sensor node what to do.
+ * Represents information instructing a sensing node what to do.
  */
 struct instructions_t
 {
@@ -84,7 +84,7 @@ struct instructions_t
     bool isNull = true;
 
     /**
-     * The ID of the stream that the sensor node is making observations for.
+     * The ID of the stream that the sensing node is making observations for.
      */
     uint16_t streamId;
 

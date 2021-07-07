@@ -254,7 +254,7 @@ static void onMqttMessage(char*, char* payload,
 }
 
 /**
- * Parses a JSON string representing the instructions for a sensor node.
+ * Parses a JSON string representing the instructions for a sensing node.
  * @param json The JSON string.
  * @param instrucOut The destination for the parsed instructions.
  * @return An indication of success or failure.

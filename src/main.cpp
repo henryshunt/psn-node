@@ -26,12 +26,12 @@ RtcDS3231<TwoWire> ds3231(Wire);
 RTC_DATA_ATTR static int bootMode = 0;
 
 /**
- * The number of attempts made to get the instructions for this sensor node.
+ * The number of attempts made to get the instructions for this sensing node.
  */
 RTC_DATA_ATTR static int instructionsCheckCount = 0;
 
 /**
- * The instructions for this sensor node.
+ * The instructions for this sensing node.
  */
 RTC_DATA_ATTR static instructions_t instructions;
 
@@ -56,7 +56,7 @@ static void setRtcAlarm(const RtcDateTime&);
 
 /**
  * Performs initialisation, manages retrieval of the instructions (retrying on error) for
- * this sensor node, and calls the routine to generate and transmit an observation.
+ * this sensing node, and calls the routine to generate and transmit an observation.
  */
 void setup()
 {
@@ -214,7 +214,7 @@ static void observe()
         {
             buffer.popRear(observations);
 
-            // If null then this sensor node has no more work to do
+            // If null then this sensing node has no more work to do
             if (!newInstructions.isNull)
                 instructions = newInstructions;
             else esp_deep_sleep_start();
