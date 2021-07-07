@@ -1,7 +1,7 @@
 #ifndef BUFFER_H
 #define BUFFER_H
 
-#include "helpers.h"
+#include "utilities.h"
 
 /**
  * A limited implementation of a circular buffer, designed specifically for storage in the

@@ -1,5 +1,5 @@
-#ifndef HELPERS_H
-#define HELPERS_H
+#ifndef UTILITIES_H
+#define UTILITIES_H
 
 #include <RtcDS3231.h>
 

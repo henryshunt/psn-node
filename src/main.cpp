@@ -1,6 +1,6 @@
 #include "main.h"
-#include "helpers/helpers.h"
-#include "helpers/buffer.h"
+#include "utilities/utilities.h"
+#include "utilities/buffer.h"
 #include "serial.h"
 #include "transmit.h"
 #include <Preferences.h>
@@ -62,7 +62,7 @@ void setup()
 {
     uint8_t macTemp[6];
     esp_efuse_mac_get_default(macTemp);
-    
+
     sprintf(macAddress, "%02x:%02x:%02x:%02x:%02x:%02x", macTemp[0],
         macTemp[1], macTemp[2], macTemp[3], macTemp[4], macTemp[5]);
 

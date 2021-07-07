@@ -3,7 +3,7 @@
  * communicating with the server.
  */
 
-#include "helpers/helpers.h"
+#include "utilities/utilities.h"
 
 /**
  * Connects to the WiFi network or times out. Note: I cannot guarantee that this function
