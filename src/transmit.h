@@ -1,6 +1,5 @@
 /**
- * Contains functions for connecting to the WiFi network, connecting to the server and
- * communicating with the server.
+ * Deals with connecting to the WiFi network and communicating with the server.
  */
 
 #include "utilities/utilities.h"
@@ -36,8 +35,8 @@ bool serverSubscribe();
 bool serverInstructions(instructions_t& instrucOut);
 
 /**
- * Transmits an observation and receives the instructions for this sensing node, or times
- * out.
+ * Transmits an observation and receives the current instructions for this sensing node,
+ * or times out.
  * @param obsJson A JSON string representing the observation to transmit.
  * @param instrucOut The destination for the received instructions. If there are no
  * instructions available then the isNull attribute is set to true.

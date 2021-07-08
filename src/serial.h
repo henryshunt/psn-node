@@ -1,8 +1,9 @@
-void trySerialMode();
-void serial_routine();
+/**
+ * Deals with communicating with and configuring the device over serial.
+ */
 
-void process_pn_command();
-void process_rc_command();
-void process_wc_command(const char*);
-void process_rt_command();
-void process_wt_command(const char*);
+/**
+ * Waits for a short time and if any data is received on the serial port, permanently
+ * switches into serial mode to respond to serial commands.
+ */
+void trySerialMode();

@@ -10,14 +10,8 @@
 #include <stdint.h>
 
 
-char cfgNetworkName[32] = { '\0' };
-bool cfgIsEnterprise;
-char cfgNetworkUsername[64] = { '\0' };
-char cfgNetworkPassword[64] = { '\0' };
-char cfgServerAddress[32] = { '\0' };
-uint16_t cfgServerPort;
-
 char macAddress[18] = { '\0' };
+config_t config;
 RtcDS3231<TwoWire> ds3231(Wire);
 
 /**
@@ -46,9 +40,8 @@ RTC_DATA_ATTR static buffer_t buffer;
 RTC_DATA_ATTR static observation_t observations[BUFFER_CAPACITY + 1];
 
 
-static bool loadConfiguration(bool&);
 static void setFirstObservationAlarm();
-static void observe();
+static void observingRoutine();
 static void generateObservation(const RtcDateTime&);
 static void serialiseObservation(const observation_t&, char* const);
 static void setRtcAlarm(const RtcDateTime&);
@@ -60,24 +53,23 @@ static void setRtcAlarm(const RtcDateTime&);
  */
 void setup()
 {
+    bool configValid;
+    if (!loadConfiguration(config, configValid))
+        esp_deep_sleep_start();
+
     uint8_t macTemp[6];
     esp_efuse_mac_get_default(macTemp);
-
     sprintf(macAddress, "%02x:%02x:%02x:%02x:%02x:%02x", macTemp[0],
         macTemp[1], macTemp[2], macTemp[3], macTemp[4], macTemp[5]);
 
-    bool configValid;
-    if (!loadConfiguration(configValid))
-        esp_deep_sleep_start();
+    ds3231.Begin();
+    ds3231.SetSquareWavePin(DS3231SquareWavePin_ModeAlarmOne);
 
     if (bootMode == 0) // Booted from power off
     {
         // Permanently enter serial mode if any serial data is received
         trySerialMode();
     }
-
-    ds3231.Begin();
-    ds3231.SetSquareWavePin(DS3231SquareWavePin_ModeAlarmOne);
 
     if (!configValid || !ds3231.IsDateTimeValid())
         esp_deep_sleep_start();
@@ -120,37 +112,32 @@ void setup()
             setFirstObservationAlarm();
         }
     }
-    else observe(); // Woken from sleep and has instructions
+    else observingRoutine(); // Woken from sleep and has instructions
 }
 
 void loop() { }
 
-/**
- * Loads configuration data from the device's non-volatile storage into the global
- * variables prefixed with cfg, and checks the validity of the values.
- * @param validOut Will be set to indicate whether the loaded configuration data is valid.
- * @return An indication of success or failure of reading the configuration data.
- */
-static bool loadConfiguration(bool& validOut)
+bool loadConfiguration(config_t& configOut, bool& validOut)
 {
     Preferences preferences;
-    if (!preferences.begin("psn", false))
+    if (!preferences.begin("psn", true))
         return false;
 
-    strcpy(cfgNetworkName, preferences.getString("nnam").c_str());
-    cfgIsEnterprise = preferences.getBool("nent");
-    strcpy(cfgNetworkUsername, preferences.getString("nunm").c_str());
-    strcpy(cfgNetworkPassword, preferences.getString("npwd").c_str());
-    strcpy(cfgServerAddress, preferences.getString("ladr").c_str());
-    cfgServerPort = preferences.getUShort("lprt", 1883);
+    strcpy(configOut.networkName, preferences.getString("nnam").c_str());
+    configOut.isEnterprise = preferences.getBool("nent");
+    strcpy(configOut.networkUsername, preferences.getString("nunm").c_str());
+    strcpy(configOut.networkPassword, preferences.getString("npwd").c_str());
+    strcpy(configOut.serverAddress, preferences.getString("ladr").c_str());
+    configOut.serverPort = preferences.getUShort("lprt", 1883);
     preferences.end();
 
     bool isValid = true;
 
     // Check validity of loaded configuration
-    if (strlen(cfgNetworkName) == 0 || (cfgIsEnterprise &&
-        (strlen(cfgNetworkUsername) == 0 || strlen(cfgNetworkPassword)) == 0) ||
-        strlen(cfgServerAddress) == 0 || cfgServerPort < 1024)
+    if (strlen(configOut.networkName) == 0 ||
+        (configOut.isEnterprise && (strlen(configOut.networkUsername) == 0 ||
+        strlen(configOut.networkPassword)) == 0) ||
+        strlen(configOut.serverAddress) == 0 || configOut.serverPort < 1024)
     {
         isValid = false;
     }
@@ -184,7 +171,7 @@ static void setFirstObservationAlarm()
  * Sets an alarm to trigger the next observation, generates an observation, transmits
  * observations stored in the buffer, then goes to sleep.
  */
-static void observe()
+static void observingRoutine()
 {
     RtcDateTime now = ds3231.GetDateTime();
     RtcDateTime nextAlarm = now + (instructions.interval * 60);

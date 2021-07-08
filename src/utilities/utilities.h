@@ -15,6 +15,11 @@
 #define SERIAL_TIMEOUT 5
 
 /**
+ * The maximum length of a serial command.
+ */
+#define SERIAL_COMMAND_LENGTH 200
+
+/**
  * The number of times to repeat attempting to get the instructions for this sensing node.
  */
 #define INSTRUCTIONS_CHECKS 15
@@ -47,31 +52,41 @@
 
 
 /**
- * Represents the available server-related asynchronous actions.
+ * Represents the device's configuration data.
  */
-enum ServerAction
+struct config_t
 {
     /**
-     * No action.
+     * The name of the WiFi network to connect to.
      */
-    None,
+    char networkName[32] = { '\0' };
 
     /**
-     * Subscribing to the MQTT server.
+     * Is the WiFi network an enterprise network? An enterprise network requires credentials
+     * with a username and password.
      */
-    Subscribe,
+    bool isEnterprise;
 
     /**
-     * Requesting instructions for the sensing node.
+     * The username to connect to the WiFi network with, if it is an enterprise network.
      */
-    Instructions,
+    char networkUsername[64] = { '\0' };
 
     /**
-     * Transmitting an observation.
+     * The password to connect to the WiFi network with.
      */
-    Observation
+    char networkPassword[64] = { '\0' };
+
+    /**
+     * The address of the MQTT server to connect to.
+     */
+    char serverAddress[32] = { '\0' };
+
+    /**
+     * The port to connect to the MQTT server through.
+     */
+    uint16_t serverPort;
 };
-
 
 /**
  * Represents information instructing a sensing node what to do.
@@ -105,13 +120,41 @@ struct instructions_t
 struct observation_t
 {
     /**
-     * The time of the observation. Stored as the number of seconds since 2000.
+     * The time of the observation. Stored as the number of seconds since January 1st
+     * 2000.
      */
     uint32_t time;
 
     float temperature;
     float relativeHumidity;
     float batteryVoltage;
+};
+
+
+/**
+ * Represents the available server-related asynchronous actions.
+ */
+enum ServerAction
+{
+    /**
+     * No action.
+     */
+    None,
+
+    /**
+     * Subscribing to the MQTT server.
+     */
+    Subscribe,
+
+    /**
+     * Requesting instructions for the sensing node.
+     */
+    Instructions,
+
+    /**
+     * Transmitting an observation.
+     */
+    Observation
 };
 
 

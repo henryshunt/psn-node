@@ -1,6 +1,5 @@
 /**
- * Contains functions for connecting to the WiFi network, connecting to the server and
- * communicating with the server.
+ * Deals with connecting to the WiFi network and communicating with the server.
  */
 
 #include "transmit.h"
@@ -53,20 +52,20 @@ static bool parseInstructions(const char* const, instructions_t&);
 
 bool networkConnect()
 {
-    if (cfgIsEnterprise)
+    if (config.isEnterprise)
     {
         WiFi.mode(WIFI_STA);
         
         esp_wifi_sta_wpa2_ent_set_username(
-            (uint8_t *)cfgNetworkUsername, strlen(cfgNetworkUsername));
+            (uint8_t *)config.networkUsername, strlen(config.networkUsername));
         esp_wifi_sta_wpa2_ent_set_password(
-            (uint8_t *)cfgNetworkPassword, strlen(cfgNetworkPassword));
+            (uint8_t *)config.networkPassword, strlen(config.networkPassword));
 
         esp_wpa2_config_t config = WPA2_CONFIG_INIT_DEFAULT();
         esp_wifi_sta_wpa2_ent_enable(&config);
     }
 
-    WiFi.begin(cfgNetworkName, cfgNetworkPassword);
+    WiFi.begin(config.networkName, config.networkPassword);
     delay(1000);
 
     int checks = 1;
@@ -87,7 +86,7 @@ bool serverConnect()
 
     server.onSubscribe(onMqttSubscribe);
     server.onMessage(onMqttMessage);
-    server.setServer(cfgServerAddress, cfgServerPort);
+    server.setServer(config.serverAddress, config.serverPort);
 
     server.connect();
     delay(1000);
@@ -262,9 +261,7 @@ static void onMqttMessage(char*, char* payload,
 static bool parseInstructions(const char* const json, instructions_t& instrucOut)
 {
     StaticJsonDocument<JSON_OBJECT_SIZE(5)> document;
-    DeserializationError status = deserializeJson(document, json);
-    
-    if (status != DeserializationError::Ok)
+    if (deserializeJson(document, json) != DeserializationError::Ok)
         return false;
 
     JsonObject jsonObject = document.as<JsonObject>();
